@@ -6,8 +6,8 @@ from typing import Any
 
 from logzip import compress as logzip_compress
 
-from logcmp.compressors.base import Compressor
-from logcmp.models import Algorithm
+from llmlogs.compressors.base import Compressor
+from llmlogs.models import Algorithm
 
 
 class LogzipCompressor(Compressor):

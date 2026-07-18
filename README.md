@@ -1,21 +1,24 @@
-# logcmp
+# llmlogs
 
 Compare **logzip** and **drain3** compression on Kubernetes **pod logs from ClickHouse**.
 
-Input schema (only these three fields):
+Primary model: **`PodLogs`** — `pod_name` once, plus a list of `{time, message}` lines (token-efficient for LLMs).
 
-| Column | Description |
+| Field | Description |
 | --- | --- |
-| `time` | Event timestamp |
-| `pod_name` | Kubernetes pod name |
-| `message` | Log message body |
+| `pod_name` | Kubernetes pod name (header, not repeated per line) |
+| `logs[].time` | Event timestamp |
+| `logs[].message` | Log message body |
 
 ```sql
-SELECT time, pod_name, message
+-- preferred: fix the pod in the WHERE, project only time + message
+SELECT time, message
 FROM otel.logs
 WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
 ORDER BY time
 ```
+
+Flat ClickHouse rows with `time, pod_name, message` are still accepted and grouped by pod.
 
 | Algorithm | Package | Style |
 | --- | --- | --- |
@@ -37,70 +40,74 @@ uv pip install -e ".[dev]"
 
 ## Library API
 
-Pass rows from your ClickHouse client directly:
-
 ```python
-from logcmp import compress_logs, compare_algorithms, PodLogRecord
+from llmlogs import compress_logs, compare_algorithms, PodLogs, LogEntry
 
-# rows from clickhouse-connect / clickhouse-driver / HTTP JSON, etc.
-# named_results() is a one-shot generator — materialize it before reusing.
-rows = list(client.query("SELECT time, pod_name, message FROM ...").named_results())
-# each row: {"time": "...", "pod_name": "...", "message": "..."}
+# Preferred: PodLogs (pod_name + logs)
+pod = PodLogs(
+    pod_name="checkout-7d9f8b6c4-xk2m1",
+    logs=[
+        LogEntry(time="2026-07-18T09:15:01Z", message="ready"),
+        LogEntry(time="2026-07-18T09:15:02Z", message="request ok"),
+    ],
+)
+result = compress_logs(pod, "logzip")
 
-logzip_result = compress_logs(rows, "logzip")
-drain3_result = compress_logs(rows, "drain3")
+# Or: time/message rows + pod_name kwarg
+rows = list(client.query(
+    "SELECT time, message FROM otel.logs WHERE pod_name = {p:String}",
+    parameters={"p": "checkout-7d9f8b6c4-xk2m1"},
+).named_results())
+compress_logs(rows, "drain3", pod_name="checkout-7d9f8b6c4-xk2m1")
 
-print(logzip_result.summary())
-print(drain3_result.summary())
-
-comparison = compare_algorithms(rows)
+# Or: flat rows still work (grouped by pod_name)
+flat = list(client.query("SELECT time, pod_name, message FROM ...").named_results())
+comparison = compare_algorithms(flat)
 print(comparison.summary())
-print("winner:", comparison.best().algorithm.value)
 ```
 
-Or with typed records:
+### LLM-oriented text format
 
-```python
-records = [
-    PodLogRecord(time="2026-07-18T09:15:01Z", pod_name="app-0", message="ready"),
-    PodLogRecord(time="2026-07-18T09:15:02Z", pod_name="app-0", message="request ok"),
-]
-compare_algorithms(records)
+Before compression, logs are rendered so the pod name appears **once**:
+
+```text
+# pod: checkout-7d9f8b6c4-xk2m1
+2026-07-18T09:15:01.123Z request method=GET path=/api/v1/health status=200 duration_ms=3
+2026-07-18T09:15:01.456Z request method=GET path=/api/v1/health status=200 duration_ms=2
 ```
 
-### `compress_logs(rows, algorithm, **kwargs) -> CompressionResult`
+### `compress_logs(rows, algorithm, *, pod_name=None, **kwargs) -> CompressionResult`
 
 Primary entry point.
 
-- `rows`: `list[dict]` / `list[PodLogRecord]` / JSON array string / NDJSON (JSONEachRow)
+- `rows`: `PodLogs` / `list[PodLogs]` / flat dicts / JSON / NDJSON
 - `algorithm`: `"logzip"` or `"drain3"`
+- `pod_name`: required when rows only have `time` + `message`
 
-### `compare_algorithms(rows) -> ComparisonResult`
+### `compare_algorithms(rows, *, pod_name=None) -> ComparisonResult`
 
 Runs both algorithms; use `.best()` and `.summary()` to compare.
 
 ## CLI
 
-Accepts **JSON array** or **NDJSON (JSONEachRow)** — the usual ClickHouse export formats — not raw log files.
+Accepts **JSON array** or **NDJSON (JSONEachRow)** — flat rows or structured `PodLogs`.
 
 ```bash
-# from clickhouse-client JSONEachRow
+# time + message only (pass pod name on the CLI)
 clickhouse-client -q "
-  SELECT time, pod_name, message
+  SELECT time, message
   FROM otel.logs
   WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
   FORMAT JSONEachRow
-" | logcmp compare
+" | llmlogs compare --pod-name checkout-7d9f8b6c4-xk2m1
 
-# compress one algorithm
-logcmp compress -a logzip  -i rows.json --stats
-logcmp compress -a drain3  -i rows.ndjson --stats
+# flat rows with pod_name in each object still work
+llmlogs compress -a logzip  -i rows.json --stats
+llmlogs compress -a drain3  -i rows.ndjson --stats
 
-# compare + JSON report + artifacts (report to file, summary to stderr)
-logcmp compare -i rows.json -o report.json --write-artifacts ./out
-
-# JSON report on stdout (equivalently: -o -)
-logcmp compare -i rows.json --json
+# compare + JSON report + artifacts
+llmlogs compare -i rows.json -o report.json --write-artifacts ./out
+llmlogs compare -i rows.json --json
 ```
 
 ## Development
@@ -113,12 +120,12 @@ make check   # ruff format + ruff check + mypy + pytest
 ## Project layout
 
 ```text
-src/logcmp/
-  models.py                # PodLogRecord (time, pod_name, message)
+src/llmlogs/
+  models.py                # PodLogs / LogEntry (pydantic), results
   pipeline.py              # compress_logs()
   compare.py               # compare_algorithms()
   compressors/             # logzip + drain3 backends
-  cli.py                   # logcmp CLI
+  cli.py                   # llmlogs CLI
 tests/fixtures/
   sample_pod_logs.json     # sample ClickHouse rows
 ```
@@ -126,5 +133,5 @@ tests/fixtures/
 ## Notes
 
 - Upstream query owns ClickHouse access; this package only compresses the projected rows.
-- Rows are normalized to `"{time} {pod_name} {message}"` lines before compression so both algorithms see the same payload.
+- Text form is `# pod: {name}` then `{time} {message}` lines so both algorithms see the same payload and LLMs are not billed for a repeated pod name.
 - Metrics use UTF-8 byte lengths so results are comparable across backends.

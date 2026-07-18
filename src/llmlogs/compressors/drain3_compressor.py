@@ -8,8 +8,8 @@ from typing import Any
 from drain3 import TemplateMiner
 from drain3.template_miner_config import TemplateMinerConfig
 
-from logcmp.compressors.base import Compressor
-from logcmp.models import Algorithm
+from llmlogs.compressors.base import Compressor
+from llmlogs.models import Algorithm
 
 
 class Drain3Compressor(Compressor):
@@ -55,7 +55,8 @@ class Drain3Compressor(Compressor):
 
     def _compress(self, text: str) -> tuple[str, dict[str, object]]:
         miner = self._build_miner()
-        lines = [raw_line.strip() for raw_line in text.splitlines()]
+        raw_lines = text.splitlines()
+        lines = [raw_line.strip() for raw_line in raw_lines]
 
         # Pass 1: mine templates. Parameters are extracted in pass 2 against
         # the final templates — extracting during mining misaligns with the
@@ -75,9 +76,13 @@ class Drain3Compressor(Compressor):
         # Pass 2: encode each line against the final legend.
         body: list[dict[str, Any]] = []
         raw_fallbacks = 0
-        for line, cluster_id in zip(lines, cluster_ids, strict=True):
+        for raw_line, line, cluster_id in zip(raw_lines, lines, cluster_ids, strict=True):
             if cluster_id is None:
-                body.append({"t": None, "p": []})
+                if raw_line:
+                    raw_fallbacks += 1
+                    body.append({"t": None, "p": [], "raw": raw_line})
+                else:
+                    body.append({"t": None, "p": []})
                 continue
             template = legend.get(str(cluster_id))
             params = (
@@ -85,16 +90,24 @@ class Drain3Compressor(Compressor):
                 if template is not None
                 else None
             )
-            if params is None:
+            if template is None or params is None:
                 # Cluster evicted (max_clusters LRU) or template regex did not
                 # match; keep the raw line instead of silently dropping data.
                 raw_fallbacks += 1
-                body.append({"t": None, "p": [], "raw": line})
+                body.append({"t": None, "p": [], "raw": raw_line})
                 continue
-            body.append({"t": cluster_id, "p": [str(param.value) for param in params]})
+            param_values = [str(param.value) for param in params]
+            reconstructed = template
+            for value in param_values:
+                reconstructed = reconstructed.replace("<*>", value, 1)
+            if reconstructed != raw_line:
+                raw_fallbacks += 1
+                body.append({"t": None, "p": [], "raw": raw_line})
+                continue
+            body.append({"t": cluster_id, "p": param_values})
 
         payload = {
-            "format": "drain3-logcmp-v1",
+            "format": "drain3-llmlogs-v1",
             "legend": legend,
             "body": body,
         }

@@ -1,11 +1,11 @@
-"""Tests for the logcmp CLI."""
+"""Tests for the llmlogs CLI."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from logcmp.cli import main
+from llmlogs.cli import main
 
 
 def test_cli_compress_logzip(sample_pod_logs_path: Path, tmp_path: Path, capsys) -> None:
@@ -33,7 +33,7 @@ def test_cli_compress_drain3_stdout(sample_pod_logs_path: Path, capsys) -> None:
     code = main(["compress", "-a", "drain3", "-i", str(sample_pod_logs_path)])
     assert code == 0
     out = capsys.readouterr().out
-    assert "drain3-logcmp-v1" in out
+    assert "drain3-llmlogs-v1" in out
 
 
 def test_cli_compare_summary(sample_pod_logs_path: Path, capsys) -> None:
@@ -65,7 +65,7 @@ def test_cli_compare_json_and_artifacts(
     )
     assert code == 0
     payload = json.loads(report.read_text(encoding="utf-8"))
-    assert payload["schema"] == ["time", "pod_name", "message"]
+    assert payload["schema"] == ["pod_name", "logs"]
     assert "logzip" in payload["results"]
     assert "drain3" in payload["results"]
     assert (artifacts / "logzip.out").exists()
@@ -86,12 +86,28 @@ def test_cli_invalid_json_returns_error(tmp_path: Path) -> None:
     assert code == 2
 
 
+def test_cli_invalid_utf8_returns_error(tmp_path: Path, capsys) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b"\xff")
+    code = main(["compare", "-i", str(bad)])
+    assert code == 2
+    assert "error: cannot read" in capsys.readouterr().err
+
+
+def test_cli_pod_name_for_time_message_rows(tmp_path: Path, capsys) -> None:
+    rows = tmp_path / "rows.json"
+    rows.write_text('[{"time":"t1","message":"ready"}]', encoding="utf-8")
+    code = main(["compare", "-i", str(rows), "--pod-name", "app-0"])
+    assert code == 0
+    assert "records: 1" in capsys.readouterr().out
+
+
 def test_cli_compare_json_stdout(sample_pod_logs_path: Path, capsys) -> None:
     code = main(["compare", "-i", str(sample_pod_logs_path), "--json"])
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["best"] in {"logzip", "drain3"}
-    assert payload["schema"] == ["time", "pod_name", "message"]
+    assert payload["schema"] == ["pod_name", "logs"]
 
 
 def test_cli_compare_output_dash_emits_json(sample_pod_logs_path: Path, capsys) -> None:

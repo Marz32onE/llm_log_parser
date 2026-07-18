@@ -14,6 +14,6 @@ typecheck:
 	.venv/bin/mypy
 
 test:
-	.venv/bin/pytest --cov=logcmp --cov-report=term-missing
+	.venv/bin/pytest --cov=llmlogs --cov-report=term-missing
 
 check: format lint typecheck test

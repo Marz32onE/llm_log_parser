@@ -3,14 +3,14 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "logcmp"
+name = "llmlogs"
 version = "0.1.0"
-description = "Compare logzip and drain3 compression on Kubernetes application logs"
+description = "Token-efficient Kubernetes pod log compression for LLMs (logzip + drain3)"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-authors = [{ name = "logcmp contributors" }]
-keywords = ["logs", "compression", "kubernetes", "drain3", "logzip"]
+authors = [{ name = "llmlogs contributors" }]
+keywords = ["logs", "compression", "kubernetes", "llm", "drain3", "logzip"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
   "drain3>=0.9.11",
   "logzip>=2.2.0",
+  "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -33,13 +34,13 @@ dev = [
 ]
 
 [project.scripts]
-logcmp = "logcmp.cli:main"
+llmlogs = "llmlogs.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/logcmp"]
+packages = ["src/llmlogs"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/logcmp", "tests", "README.md", "LICENSE"]
+include = ["src/llmlogs", "tests", "README.md", "LICENSE"]
 
 [tool.ruff]
 target-version = "py310"
@@ -68,10 +69,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "ANN201", "ANN001"]
-"src/logcmp/cli.py" = ["T201"]
+"src/llmlogs/cli.py" = ["T201"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["logcmp"]
+known-first-party = ["llmlogs"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -90,7 +91,7 @@ no_implicit_optional = true
 show_error_codes = true
 pretty = true
 mypy_path = "src"
-packages = ["logcmp"]
+packages = ["llmlogs"]
 
 [[tool.mypy.overrides]]
 module = ["drain3", "drain3.*", "logzip", "logzip.*"]
@@ -108,7 +109,7 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["logcmp"]
+source = ["llmlogs"]
 
 [tool.coverage.report]
 show_missing = true

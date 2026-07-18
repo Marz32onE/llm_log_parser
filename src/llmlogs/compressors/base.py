@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from time import perf_counter
 
-from logcmp.models import Algorithm, CompressionResult
+from llmlogs.models import Algorithm, CompressionResult
 
 
 class Compressor(ABC):

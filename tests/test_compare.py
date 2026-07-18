@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from logcmp.compare import compare_algorithms
-from logcmp.models import Algorithm, PodLogRecord
+from llmlogs.compare import compare_algorithms
+from llmlogs.models import Algorithm, PodLogs
 
 
 def test_compare_algorithms_runs_both(sample_pod_rows: list[dict[str, str]]) -> None:
@@ -17,13 +17,13 @@ def test_compare_algorithms_runs_both(sample_pod_rows: list[dict[str, str]]) -> 
     assert "best:" in summary
 
 
-def test_compare_algorithms_subset(sample_pod_records: list[PodLogRecord]) -> None:
-    comparison = compare_algorithms(sample_pod_records, algorithms=["logzip"])
+def test_compare_algorithms_subset(sample_pod_logs: list[PodLogs]) -> None:
+    comparison = compare_algorithms(sample_pod_logs, algorithms=["logzip"])
     assert set(comparison.results) == {Algorithm.LOGZIP}
 
 
-def test_compare_algorithms_case_insensitive(sample_pod_records: list[PodLogRecord]) -> None:
-    comparison = compare_algorithms(sample_pod_records, algorithms=["Drain3"])
+def test_compare_algorithms_case_insensitive(sample_pod_logs: list[PodLogs]) -> None:
+    comparison = compare_algorithms(sample_pod_logs, algorithms=["Drain3"])
     assert set(comparison.results) == {Algorithm.DRAIN3}
 
 

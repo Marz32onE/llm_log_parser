@@ -1,4 +1,4 @@
-"""CLI entry for compressing ClickHouse pod logs (time, pod_name, message)."""
+"""CLI entry for compressing ClickHouse pod logs (pod_name + time/message logs)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import json
 import sys
 from pathlib import Path
 
-from logcmp import __version__
-from logcmp.compare import compare_algorithms
-from logcmp.models import SCHEMA, Algorithm, ComparisonResult, PodLogRecord, parse_records
-from logcmp.pipeline import compress_logs
+from llmlogs import __version__
+from llmlogs.compare import compare_algorithms
+from llmlogs.models import SCHEMA, Algorithm, ComparisonResult, PodLogs, parse_pod_logs
+from llmlogs.pipeline import compress_logs
 
 
 def _read_input(path: str | None) -> str:
@@ -31,9 +31,9 @@ def _write_output(path: str | None, content: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        prog="logcmp",
+        prog="llmlogs",
         description=(
-            "Compress Kubernetes pod logs (ClickHouse schema: time, pod_name, message) "
+            "Compress Kubernetes pod logs (schema: pod_name + logs[{time, message}]) "
             "with logzip and/or drain3, and compare the results."
         ),
     )
@@ -56,13 +56,21 @@ def build_parser() -> argparse.ArgumentParser:
         "-i",
         "--input",
         default="-",
-        help="JSON array or NDJSON (JSONEachRow) of {time,pod_name,message} (default: stdin)",
+        help=(
+            "JSON/NDJSON of PodLogs {pod_name, logs} or flat rows "
+            "{time, pod_name, message} (default: stdin)"
+        ),
     )
     compress.add_argument(
         "-o",
         "--output",
         default="-",
         help="Output file (default: stdout)",
+    )
+    compress.add_argument(
+        "--pod-name",
+        default=None,
+        help="Default pod name when flat rows only have time/message",
     )
     compress.add_argument(
         "--stats",
@@ -78,7 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-i",
         "--input",
         default="-",
-        help="JSON array or NDJSON (JSONEachRow) of {time,pod_name,message} (default: stdin)",
+        help=(
+            "JSON/NDJSON of PodLogs {pod_name, logs} or flat rows "
+            "{time, pod_name, message} (default: stdin)"
+        ),
     )
     compare.add_argument(
         "-o",
@@ -88,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Write the JSON comparison report to FILE ('-' for stdout; "
             "default: human-readable summary on stdout)"
         ),
+    )
+    compare.add_argument(
+        "--pod-name",
+        default=None,
+        help="Default pod name when flat rows only have time/message",
     )
     compare.add_argument(
         "--json",
@@ -103,8 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_compress(args: argparse.Namespace, records: list[PodLogRecord]) -> int:
-    result = compress_logs(records, args.algorithm)
+def _run_compress(args: argparse.Namespace, pods: list[PodLogs]) -> int:
+    result = compress_logs(pods, args.algorithm)
     _write_output(args.output, result.compressed_text)
     if args.stats:
         print(result.summary(), file=sys.stderr)
@@ -132,8 +148,8 @@ def _comparison_report(comparison: ComparisonResult) -> dict[str, object]:
     }
 
 
-def _run_compare(args: argparse.Namespace, records: list[PodLogRecord]) -> int:
-    comparison = compare_algorithms(records)
+def _run_compare(args: argparse.Namespace, pods: list[PodLogs]) -> int:
+    comparison = compare_algorithms(pods)
     if args.write_artifacts:
         artifact_dir = Path(args.write_artifacts)
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         raw = _read_input(args.input)
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         print(f"error: cannot read {args.input}: {exc}", file=sys.stderr)
         return 2
     if not raw.strip():
@@ -167,19 +183,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        records = parse_records(raw)
+        pods = parse_pod_logs(raw, pod_name=args.pod_name)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    if not records:
-        print("error: no pod log records found (need time, pod_name, message)", file=sys.stderr)
+    if not pods or sum(p.line_count for p in pods) == 0:
+        print(
+            "error: no pod log records found (need PodLogs or time/message + pod_name)",
+            file=sys.stderr,
+        )
         return 2
 
     try:
         if args.command == "compress":
-            return _run_compress(args, records)
-        return _run_compare(args, records)
+            return _run_compress(args, pods)
+        return _run_compare(args, pods)
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 2
