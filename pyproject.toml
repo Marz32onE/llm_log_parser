@@ -1,0 +1,116 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "logcmp"
+version = "0.1.0"
+description = "Compare logzip and drain3 compression on Kubernetes application logs"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "logcmp contributors" }]
+keywords = ["logs", "compression", "kubernetes", "drain3", "logzip"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: System :: Logging",
+]
+dependencies = [
+  "drain3>=0.9.11",
+  "logzip>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.14",
+  "pytest>=8.0",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+]
+
+[project.scripts]
+logcmp = "logcmp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/logcmp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/logcmp", "tests", "README.md", "LICENSE"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # pyflakes
+  "I",    # isort
+  "B",    # flake8-bugbear
+  "UP",   # pyupgrade
+  "SIM",  # flake8-simplify
+  "RUF",  # ruff-specific
+  "N",    # pep8-naming
+  "ANN",  # flake8-annotations
+  "S",    # flake8-bandit (security)
+  "C4",   # flake8-comprehensions
+  "PTH",  # flake8-use-pathlib
+]
+ignore = [
+  "S101",  # assert allowed in tests; gated via per-file-ignores
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ANN201", "ANN001"]
+"src/logcmp/cli.py" = ["T201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["logcmp"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+pretty = true
+mypy_path = "src"
+packages = ["logcmp"]
+
+[[tool.mypy.overrides]]
+module = ["drain3", "drain3.*", "logzip", "logzip.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["logcmp"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 90

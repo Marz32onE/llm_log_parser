@@ -1,0 +1,77 @@
+[
+  {
+    "time": "2026-07-18T09:15:01.123Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=3"
+  },
+  {
+    "time": "2026-07-18T09:15:01.456Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=2"
+  },
+  {
+    "time": "2026-07-18T09:15:02.001Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/orders status=200 duration_ms=45"
+  },
+  {
+    "time": "2026-07-18T09:15:02.088Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/orders status=200 duration_ms=41"
+  },
+  {
+    "time": "2026-07-18T09:15:02.201Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=POST path=/api/v1/orders status=201 duration_ms=120"
+  },
+  {
+    "time": "2026-07-18T09:15:02.333Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=2"
+  },
+  {
+    "time": "2026-07-18T09:15:03.010Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/orders/42 status=404 duration_ms=8"
+  },
+  {
+    "time": "2026-07-18T09:15:03.110Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=3"
+  },
+  {
+    "time": "2026-07-18T09:15:03.450Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "payment failed order_id=ord-98421 reason=timeout upstream=payments-svc:8080"
+  },
+  {
+    "time": "2026-07-18T09:15:03.500Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=2"
+  },
+  {
+    "time": "2026-07-18T09:15:04.001Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/orders status=200 duration_ms=39"
+  },
+  {
+    "time": "2026-07-18T09:15:04.050Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=POST path=/api/v1/orders status=201 duration_ms=98"
+  },
+  {
+    "time": "2026-07-18T09:15:04.200Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=2"
+  },
+  {
+    "time": "2026-07-18T09:15:04.400Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/orders status=200 duration_ms=44"
+  },
+  {
+    "time": "2026-07-18T09:15:05.000Z",
+    "pod_name": "checkout-7d9f8b6c4-xk2m1",
+    "message": "request method=GET path=/api/v1/health status=200 duration_ms=3"
+  }
+]
