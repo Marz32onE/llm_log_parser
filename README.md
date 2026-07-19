@@ -1,5 +1,7 @@
 # llmlogs
 
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
 Compare **logzip** and **drain3** compression on Kubernetes **pod logs from ClickHouse**.
 
 Primary model: **`PodLogs`** — `pod_name` once, plus a list of `{time, message}` lines (token-efficient for LLMs).
@@ -151,6 +153,93 @@ llmlogs compare -i rows.json --json
 llmlogs digest -i rows.json --stats
 ```
 
+## Findings — optimize for LLM tokens, not bytes
+
+All numbers below are from a realistic 629-line, 3-pod incident sample
+(steady traffic → DB slowdown → pool exhaustion → 504s → worker OOM →
+restart → recovery), tokenized with tiktoken `o200k_base`:
+
+| Form | Tokens | Saved vs naive JSON paste | Notes |
+| --- | ---: | ---: | --- |
+| Raw JSON rows (pretty) | 42,837 | — | what people naively paste into an LLM |
+| Compact JSON | 35,920 | 16% | keys still repeated per row |
+| Rendered text, full ISO timestamps | 19,909 | 54% | old default |
+| **Rendered text, short clock (current default)** | **14,904** | **65%** | lossless |
+| logzip on rendered text | 12,187 | 72% | readability cost (see below) |
+| drain3 JSON payload | 17,139 | 60% | **+15% vs its own input text** |
+| **`digest`** | **686** | **98.4%** | lossy; incident story intact |
+
+What the measurements taught us:
+
+1. **Bytes mislead.** logzip saved 49% bytes but only 18% tokens on the same
+   input: legend references like `#a#` are byte-cheap but cost 2–3 BPE tokens
+   each. Any byte-based "compression ratio" overstates LLM savings.
+2. **JSON envelopes are token poison.** drain3's per-line
+   `{"t":2,"p":[...]}` payload costs *more* tokens than the plain rendered
+   text it encodes.
+3. **Space-tokenized template mining saves little on `key=value` logs.**
+   drain3 treats `duration_ms=45` as one token, so extracted parameters carry
+   the keys anyway and the template factors out almost nothing.
+4. **Timestamps dominate.** A full ISO timestamp is ~16 tokens per line, the
+   short clock ~8 — factoring the shared date into the pod header cut 25%
+   alone, losslessly.
+5. **Reference indirection hurts LLM comprehension.** logzip's two-level
+   legend entries (`#10# = #0# #2#`) and token splices (`#7#9` meaning
+   `duration_ms=3` + `9` → `duration_ms=39`) force multi-hop decoding per
+   line. Its saving grace: rare critical lines (OOM, restarts) stay verbatim
+   because templates only capture frequent patterns.
+6. **Aggregation beats per-line encoding for comprehension.** An LLM asked
+   "what happened in this pod?" needs distributions plus anomalies, not 280
+   near-identical health checks — which is exactly what `digest` renders.
+
+## Digest design
+
+`digest` inverts the compression contract: instead of keeping every line
+cheap, it keeps every **pattern** once and every **anomaly** verbatim — the
+same way an SRE reads logs (patterns first, outliers second).
+
+Per pod, `digest.py` runs five steps:
+
+1. **Mine templates** over messages (timestamps excluded) with drain3.
+2. **Extract parameters in a second pass** against the *final* templates —
+   extracting while mining misaligns early lines once a template
+   generalizes (same lesson as `Drain3Compressor`).
+3. **Split by frequency** (`rare_threshold`, default 3): frequent clusters
+   become one aggregated pattern line; rare clusters go verbatim under
+   `## events`. Rationale: frequent = normal behavior, statistics suffice;
+   rare = incident signal (OOM, restart, vacuum), zero-loss required. Same
+   assumption as log anomaly detection literature (rare template ≈ anomaly).
+4. **Summarize each `<*>` slot** with ordered rules:
+   - one distinct value → print it;
+   - **few distinct values → always list with counts** (`<status=200 x250,
+     status=504 x30>`) — collapsing `status=200/404` into `200..404` would
+     hide the rare error, statuses are categories, not magnitudes;
+   - many distinct same-key numerics → range (`duration_ms=1..9956`);
+   - all-unique high cardinality → `<77 distinct values>`;
+   - otherwise top-N + `+K more`.
+5. **Render cheap**: date factored into the pod header, `HH:MM:SS.mmm`
+   clocks, `xN` counts with first–last time spans, and a one-line notation
+   legend at the top (~20 tokens) so the LLM never has to guess the format.
+
+Lossy by design — reconstruction is impossible, so `digest` is an additional
+mode, not a replacement: use `compress_logs` (logzip/drain3) when the payload
+must be reconstructable.
+
+### References
+
+- Drain algorithm: He, Zhu, Zheng, Lyu — *"Drain: An Online Log Parsing
+  Approach with Fixed Depth Tree"*, IEEE ICWS 2017.
+- [drain3](https://github.com/logpai/Drain3) — maintained Python
+  implementation; `extract_parameters()` comes from it.
+- [tiktoken](https://github.com/openai/tiktoken) `o200k_base` — measurement
+  tokenizer; relative comparisons transfer across modern BPE tokenizers.
+- Conceptual cousins: Datadog Log Patterns, Splunk patterns tab, Sentry
+  grouping (aggregate the repetitive, surface the rare); DeepLog (Du et al.,
+  CCS 2017) for the rare-template ≈ anomaly assumption.
+- The concrete rules (frequency split, slot-rule ordering, date factoring,
+  notation header) are not from a paper — they were derived from the token
+  measurements above, and each is pinned by a test.
+
 ## Development
 
 ```bash
@@ -179,5 +268,5 @@ tests/fixtures/
 
 - Upstream query owns ClickHouse access; this package only compresses the projected rows.
 - Text form is `# pod: {name} date: {date}` then `{clock} {message}` lines so both algorithms see the same payload and LLMs are not billed for a repeated pod name or date.
-- Metrics report UTF-8 bytes **and** LLM tokens (when `tiktoken` is installed — `pip install llmlogs[tokens]`). Bytes mislead for LLM cost: on a 629-line sample logzip saved 42% bytes but only 14% tokens, and drain3's JSON payload cost **more** tokens than the plain text. Choose formats by token counts.
-- Rough guide from that sample (tokens vs naive JSON paste): rendered text ≈ 53% cheaper, short-date rendering ≈ 65% cheaper, `digest` ≈ 98% cheaper. `digest` is lossy; the compressors are reconstructable.
+- Metrics report UTF-8 bytes **and** LLM tokens (when `tiktoken` is installed — `pip install llmlogs[tokens]`). Choose formats by token counts, not bytes — see [Findings](#findings--optimize-for-llm-tokens-not-bytes).
+- `digest` is lossy; the compressors are reconstructable.
