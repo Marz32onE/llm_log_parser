@@ -13,8 +13,8 @@ Package is named **`llmlogs`** (don't confuse the **`logzip`** compressor depend
 ```bash
 make install     # uv venv (Python 3.10, .venv) + editable install with [dev] extras
 make check       # format + lint + typecheck + test (run before claiming work done)
-make format      # ruff format src tests
-make lint        # ruff check src tests
+make format      # isort + black on src tests
+make lint        # isort/black --check + flake8 + pylint
 make typecheck   # mypy (strict mode, configured in pyproject.toml)
 make test        # pytest with coverage (fail_under=90)
 
@@ -23,7 +23,7 @@ make test        # pytest with coverage (fail_under=90)
 ```
 
 - pytest runs with `filterwarnings = ["error"]` — any warning fails the test.
-- ruff has a strict select set (incl. `ANN`, `S`, `B`, `PTH`); mypy is `strict = true`.
+- Lint stack: **isort**, **black**, **flake8**, **pylint**, **mypy** (`strict = true`).
 
 ## Architecture
 

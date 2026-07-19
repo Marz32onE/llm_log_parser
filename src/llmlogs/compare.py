@@ -14,7 +14,7 @@ from llmlogs.pipeline import LogRows, coerce_algorithm, compress_text
 from llmlogs.tokens import TokenCounter
 
 
-def compare_algorithms(
+def compare_algorithms(  # pylint: disable=too-many-arguments
     rows: LogRows,
     *,
     algorithms: list[Algorithm | str] | None = None,

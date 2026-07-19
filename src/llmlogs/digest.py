@@ -17,6 +17,8 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from drain3 import TemplateMiner
+
 from llmlogs.compressors.drain3_compressor import build_template_miner
 from llmlogs.models import (
     LogEntry,
@@ -64,6 +66,28 @@ class DigestOptions:
             raise ValueError(msg)
 
 
+@dataclass(frozen=True, slots=True)
+class _MinedPod:
+    """Drain3 mining result for one pod (shared by pattern/event builders)."""
+
+    miner: TemplateMiner
+    entries: list[LogEntry]
+    cluster_ids: list[int]
+    legend: dict[int, str]
+    counts: Counter[int]
+    date: str | None
+    opts: DigestOptions
+
+
+@dataclass(frozen=True, slots=True)
+class _ClusterTimeline:
+    """Per-cluster clocks and encounter order for span + narrative sorting."""
+
+    first_time: dict[int, str]
+    last_time: dict[int, str]
+    first_index: dict[int, int]
+
+
 def digest_logs(
     rows: LogRows,
     *,
@@ -86,66 +110,16 @@ def digest_pods(pods: Sequence[PodLogs], *, options: DigestOptions | None = None
 
 
 def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
-    miner = build_template_miner(sim_th=opts.sim_th)
-    entries = [entry for entry in pod.logs if entry.message.strip()]
-    cluster_ids = [
-        int(miner.add_log_message(entry.message.strip())["cluster_id"]) for entry in entries
-    ]
-    legend = {cluster.cluster_id: cluster.get_template() for cluster in miner.drain.clusters}
-    counts = Counter(cluster_ids)
-
-    date = _shared_date(entries)
-    header = f"# pod: {pod.pod_name}" if date is None else f"# pod: {pod.pod_name} date: {date}"
-
-    # With a factored date, zero-padded clocks compare lexicographically, so
-    # the span is a true min/max even for unsorted input. Arbitrary time
-    # strings don't order reliably; those keep first-seen/last-seen.
-    slot_values: dict[int, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
-    first_time: dict[int, str] = {}
-    last_time: dict[int, str] = {}
-    first_index: dict[int, int] = {}
-    for index, (entry, cluster_id) in enumerate(zip(entries, cluster_ids, strict=True)):
-        first_index.setdefault(cluster_id, index)
-        clock = _clock(entry.time, date)
-        if date is None:
-            first_time.setdefault(cluster_id, clock)
-            last_time[cluster_id] = clock
-        else:
-            first_time[cluster_id] = min(clock, first_time.get(cluster_id, clock))
-            last_time[cluster_id] = max(clock, last_time.get(cluster_id, clock))
-        if counts[cluster_id] <= opts.rare_threshold:
-            continue
-        params = miner.extract_parameters(
-            legend[cluster_id], entry.message.strip(), exact_matching=False
-        )
-        for slot, param in enumerate(params or []):
-            slot_values[cluster_id][slot].append(str(param.value))
-
-    # Patterns read as a narrative: earliest-first (steady state, then what
-    # broke), matching the chronological events section — not count-first.
-    if date is None:
-        ordered_ids = sorted(counts, key=lambda cid: first_index[cid])
-    else:
-        ordered_ids = sorted(counts, key=lambda cid: (first_time[cid], first_index[cid]))
-
-    patterns: list[str] = []
-    events: list[str] = []
-    for cluster_id in ordered_ids:
-        count = counts[cluster_id]
-        if count <= opts.rare_threshold:
-            continue
-        summaries = {
-            slot: _summarize_slot(values, opts.max_values, opts.always_list_keys)
-            for slot, values in slot_values[cluster_id].items()
-        }
-        rendered = _render_template(legend[cluster_id], summaries)
-        span = f"{first_time[cluster_id]}-{last_time[cluster_id]}"
-        patterns.append(f"x{count} {span} {rendered}")
-
-    rare_ids = {cluster_id for cluster_id, count in counts.items() if count <= opts.rare_threshold}
-    for entry, cluster_id in zip(entries, cluster_ids, strict=True):
-        if cluster_id in rare_ids:
-            events.append(f"{_clock(entry.time, date)} {escape_message(entry.message)}")
+    mined = _mine_pod(pod, opts)
+    header = (
+        f"# pod: {pod.pod_name}"
+        if mined.date is None
+        else f"# pod: {pod.pod_name} date: {mined.date}"
+    )
+    timeline = _cluster_timeline(mined)
+    slot_values = _collect_slot_values(mined)
+    patterns = _pattern_lines(mined, timeline, slot_values)
+    events = _event_lines(mined)
 
     lines = [header]
     if patterns:
@@ -155,6 +129,98 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
         lines.append("## events")
         lines.extend(events)
     return "\n".join(lines)
+
+
+def _mine_pod(pod: PodLogs, opts: DigestOptions) -> _MinedPod:
+    miner = build_template_miner(sim_th=opts.sim_th)
+    entries = [entry for entry in pod.logs if entry.message.strip()]
+    cluster_ids = [
+        int(miner.add_log_message(entry.message.strip())["cluster_id"]) for entry in entries
+    ]
+    legend = {cluster.cluster_id: cluster.get_template() for cluster in miner.drain.clusters}
+    return _MinedPod(
+        miner=miner,
+        entries=entries,
+        cluster_ids=cluster_ids,
+        legend=legend,
+        counts=Counter(cluster_ids),
+        date=_shared_date(entries),
+        opts=opts,
+    )
+
+
+def _cluster_timeline(mined: _MinedPod) -> _ClusterTimeline:
+    """Track first/last clocks per cluster.
+
+    With a factored date, zero-padded clocks compare lexicographically, so the
+    span is a true min/max even for unsorted input. Arbitrary time strings don't
+    order reliably; those keep first-seen/last-seen.
+    """
+    first_time: dict[int, str] = {}
+    last_time: dict[int, str] = {}
+    first_index: dict[int, int] = {}
+    for index, (entry, cluster_id) in enumerate(zip(mined.entries, mined.cluster_ids, strict=True)):
+        first_index.setdefault(cluster_id, index)
+        clock = _clock(entry.time, mined.date)
+        if mined.date is None:
+            first_time.setdefault(cluster_id, clock)
+            last_time[cluster_id] = clock
+        else:
+            first_time[cluster_id] = min(clock, first_time.get(cluster_id, clock))
+            last_time[cluster_id] = max(clock, last_time.get(cluster_id, clock))
+    return _ClusterTimeline(first_time, last_time, first_index)
+
+
+def _collect_slot_values(mined: _MinedPod) -> dict[int, dict[int, list[str]]]:
+    """Extract template parameters for frequent clusters only."""
+    slot_values: dict[int, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for entry, cluster_id in zip(mined.entries, mined.cluster_ids, strict=True):
+        if mined.counts[cluster_id] <= mined.opts.rare_threshold:
+            continue
+        params = mined.miner.extract_parameters(
+            mined.legend[cluster_id], entry.message.strip(), exact_matching=False
+        )
+        for slot, param in enumerate(params or []):
+            slot_values[cluster_id][slot].append(str(param.value))
+    return slot_values
+
+
+def _pattern_lines(
+    mined: _MinedPod,
+    timeline: _ClusterTimeline,
+    slot_values: dict[int, dict[int, list[str]]],
+) -> list[str]:
+    """Render frequent clusters earliest-first (narrative order, not count-first)."""
+    if mined.date is None:
+        ordered_ids = sorted(mined.counts, key=lambda cid: timeline.first_index[cid])
+    else:
+        ordered_ids = sorted(
+            mined.counts, key=lambda cid: (timeline.first_time[cid], timeline.first_index[cid])
+        )
+
+    patterns: list[str] = []
+    for cluster_id in ordered_ids:
+        count = mined.counts[cluster_id]
+        if count <= mined.opts.rare_threshold:
+            continue
+        summaries = {
+            slot: _summarize_slot(values, mined.opts.max_values, mined.opts.always_list_keys)
+            for slot, values in slot_values[cluster_id].items()
+        }
+        rendered = _render_template(mined.legend[cluster_id], summaries)
+        span = f"{timeline.first_time[cluster_id]}-{timeline.last_time[cluster_id]}"
+        patterns.append(f"x{count} {span} {rendered}")
+    return patterns
+
+
+def _event_lines(mined: _MinedPod) -> list[str]:
+    """Keep rare clusters verbatim under ``## events``."""
+    rare_ids = {cid for cid, count in mined.counts.items() if count <= mined.opts.rare_threshold}
+    return [
+        f"{_clock(entry.time, mined.date)} {escape_message(entry.message)}"
+        for entry, cluster_id in zip(mined.entries, mined.cluster_ids, strict=True)
+        if cluster_id in rare_ids
+    ]
 
 
 def _shared_date(entries: Sequence[LogEntry]) -> str | None:
@@ -217,32 +283,40 @@ def _summarize_slot(
     counter = Counter(values)
     if len(counter) == 1:
         return values[0]
-
     if len(counter) > max_values:
-        kv_matches = [_KV_NUM_RE.fullmatch(value) for value in values]
-        if all(match is not None for match in kv_matches):
-            keys = {match.group(1) for match in kv_matches if match is not None}
-            if len(keys) == 1:
-                key = next(iter(keys))
-                if key[:-1].lower() in always_list_keys:
-                    listed = ", ".join(
-                        f"{value} x{count}" for value, count in counter.most_common()
-                    )
-                    return f"<{listed}>"
-                numbers = [match.group(2) for match in kv_matches if match is not None]
-                low = min(numbers, key=float)
-                high = max(numbers, key=float)
-                return f"{key}{low}..{high}"
-        if all(_NUM_RE.fullmatch(value) for value in values):
-            return f"{min(values, key=float)}..{max(values, key=float)}"
-        if counter.most_common(1)[0][1] == 1:
-            return _distinct_shape(values)
-
+        high = _summarize_high_cardinality(values, counter, always_list_keys)
+        if high is not None:
+            return high
     parts = [f"{value} x{count}" for value, count in counter.most_common(max_values)]
     extra = len(counter) - max_values
     if extra > 0:
         parts.append(f"+{extra} more")
     return f"<{', '.join(parts)}>"
+
+
+def _summarize_high_cardinality(
+    values: list[str],
+    counter: Counter[str],
+    always_list_keys: frozenset[str],
+) -> str | None:
+    """Collapse a high-cardinality slot, or None to fall through to top-N listing."""
+    kv_matches = [_KV_NUM_RE.fullmatch(value) for value in values]
+    if all(match is not None for match in kv_matches):
+        keys = {match.group(1) for match in kv_matches if match is not None}
+        if len(keys) == 1:
+            key = next(iter(keys))
+            if key[:-1].lower() in always_list_keys:
+                listed = ", ".join(f"{value} x{count}" for value, count in counter.most_common())
+                return f"<{listed}>"
+            numbers = [match.group(2) for match in kv_matches if match is not None]
+            low = min(numbers, key=float)
+            high = max(numbers, key=float)
+            return f"{key}{low}..{high}"
+    if all(_NUM_RE.fullmatch(value) for value in values):
+        return f"{min(values, key=float)}..{max(values, key=float)}"
+    if counter.most_common(1)[0][1] == 1:
+        return _distinct_shape(values)
+    return None
 
 
 def _distinct_shape(values: list[str]) -> str:

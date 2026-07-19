@@ -355,7 +355,7 @@ def _first_present(row: Mapping[str, object], keys: Sequence[str]) -> object | N
 
 
 @dataclass(frozen=True, slots=True)
-class CompressionResult:
+class CompressionResult:  # pylint: disable=too-many-instance-attributes
     """Outcome of compressing a log payload with a single algorithm.
 
     ``original_tokens``/``compressed_tokens`` are LLM token counts (None when

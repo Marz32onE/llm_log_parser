@@ -78,50 +78,11 @@ class Drain3Compressor(Compressor):
         # Pass 1: mine templates. Parameters are extracted in pass 2 against
         # the final templates — extracting during mining misaligns with the
         # legend once a cluster's template generalizes on later lines.
-        cluster_ids: list[int | None] = []
-        for line in lines:
-            if not line:
-                cluster_ids.append(None)
-                continue
-            result = miner.add_log_message(line)
-            cluster_ids.append(int(result["cluster_id"]))
-
+        cluster_ids = _mine_cluster_ids(miner, lines)
         legend: dict[str, str] = {
             str(cluster.cluster_id): cluster.get_template() for cluster in miner.drain.clusters
         }
-
-        # Pass 2: encode each line against the final legend.
-        body: list[dict[str, Any]] = []
-        raw_fallbacks = 0
-        for raw_line, line, cluster_id in zip(raw_lines, lines, cluster_ids, strict=True):
-            if cluster_id is None:
-                if raw_line:
-                    raw_fallbacks += 1
-                    body.append({"t": None, "p": [], "raw": raw_line})
-                else:
-                    body.append({"t": None, "p": []})
-                continue
-            template = legend.get(str(cluster_id))
-            params = (
-                miner.extract_parameters(template, line, exact_matching=False)
-                if template is not None
-                else None
-            )
-            if template is None or params is None:
-                # Cluster evicted (max_clusters LRU) or template regex did not
-                # match; keep the raw line instead of silently dropping data.
-                raw_fallbacks += 1
-                body.append({"t": None, "p": [], "raw": raw_line})
-                continue
-            param_values = [str(param.value) for param in params]
-            reconstructed = template
-            for value in param_values:
-                reconstructed = reconstructed.replace("<*>", value, 1)
-            if reconstructed != raw_line:
-                raw_fallbacks += 1
-                body.append({"t": None, "p": [], "raw": raw_line})
-                continue
-            body.append({"t": cluster_id, "p": param_values})
+        body, raw_fallbacks = _encode_body(miner, raw_lines, lines, cluster_ids, legend)
 
         payload = {
             "format": "drain3-llmlogs-v1",
@@ -139,3 +100,63 @@ class Drain3Compressor(Compressor):
             "max_clusters": self._max_clusters,
         }
         return compressed, metadata
+
+
+def _mine_cluster_ids(miner: TemplateMiner, lines: list[str]) -> list[int | None]:
+    cluster_ids: list[int | None] = []
+    for line in lines:
+        if not line:
+            cluster_ids.append(None)
+            continue
+        result = miner.add_log_message(line)
+        cluster_ids.append(int(result["cluster_id"]))
+    return cluster_ids
+
+
+def _encode_body(
+    miner: TemplateMiner,
+    raw_lines: list[str],
+    lines: list[str],
+    cluster_ids: list[int | None],
+    legend: dict[str, str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Pass 2: encode each line against the final legend."""
+    body: list[dict[str, Any]] = []
+    raw_fallbacks = 0
+    for raw_line, line, cluster_id in zip(raw_lines, lines, cluster_ids, strict=True):
+        encoded, used_raw = _encode_line(miner, raw_line, line, cluster_id, legend)
+        body.append(encoded)
+        raw_fallbacks += int(used_raw)
+    return body, raw_fallbacks
+
+
+def _encode_line(
+    miner: TemplateMiner,
+    raw_line: str,
+    line: str,
+    cluster_id: int | None,
+    legend: dict[str, str],
+) -> tuple[dict[str, Any], bool]:
+    """Encode one line; return (payload, used_raw_fallback)."""
+    if cluster_id is None:
+        if raw_line:
+            return {"t": None, "p": [], "raw": raw_line}, True
+        return {"t": None, "p": []}, False
+
+    template = legend.get(str(cluster_id))
+    params = (
+        miner.extract_parameters(template, line, exact_matching=False)
+        if template is not None
+        else None
+    )
+    if template is None or params is None:
+        # Cluster evicted (max_clusters LRU) or template regex did not match.
+        return {"t": None, "p": [], "raw": raw_line}, True
+
+    param_values = [str(param.value) for param in params]
+    reconstructed = template
+    for value in param_values:
+        reconstructed = reconstructed.replace("<*>", value, 1)
+    if reconstructed != raw_line:
+        return {"t": None, "p": [], "raw": raw_line}, True
+    return {"t": cluster_id, "p": param_values}, False

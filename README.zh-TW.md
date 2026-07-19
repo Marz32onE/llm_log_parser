@@ -239,7 +239,7 @@ payload 必須可重建時,請用 `compress_logs`(logzip/drain3)。
 
 ```bash
 source .venv/bin/activate
-make check   # ruff format + ruff check + mypy + pytest
+make check   # isort + black + flake8 + pylint + mypy + pytest
 ```
 
 ## 專案結構

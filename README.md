@@ -249,7 +249,7 @@ must be reconstructable.
 
 ```bash
 source .venv/bin/activate
-make check   # ruff format + ruff check + mypy + pytest
+make check   # isort + black + flake8 + pylint + mypy + pytest
 ```
 
 ## Project layout

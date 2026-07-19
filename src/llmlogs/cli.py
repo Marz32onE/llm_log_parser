@@ -242,11 +242,8 @@ def _run_compare(args: argparse.Namespace, pods: list[PodLogs]) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI main entry. Returns a process exit code."""
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
+def _load_pods(args: argparse.Namespace) -> list[PodLogs] | int:
+    """Parse input into pods, or return an exit code on failure."""
     try:
         raw = _read_input(args.input)
     except (OSError, UnicodeError) as exc:
@@ -268,13 +265,25 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    return pods
 
+
+def _dispatch(args: argparse.Namespace, pods: list[PodLogs]) -> int:
+    if args.command == "compress":
+        return _run_compress(args, pods)
+    if args.command == "digest":
+        return _run_digest(args, pods)
+    return _run_compare(args, pods)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI main entry. Returns a process exit code."""
+    args = build_parser().parse_args(argv)
+    loaded = _load_pods(args)
+    if isinstance(loaded, int):
+        return loaded
     try:
-        if args.command == "compress":
-            return _run_compress(args, pods)
-        if args.command == "digest":
-            return _run_digest(args, pods)
-        return _run_compare(args, pods)
+        return _dispatch(args, loaded)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

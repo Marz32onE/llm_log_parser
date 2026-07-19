@@ -10,7 +10,7 @@ from llmlogs.compressors.base import Compressor
 from llmlogs.models import Algorithm
 
 
-class LogzipCompressor(Compressor):
+class LogzipCompressor(Compressor):  # pylint: disable=too-many-instance-attributes
     """Compress logs with the logzip package.
 
     Produces LLM-readable structured text rather than a binary blob. Defaults
@@ -19,7 +19,7 @@ class LogzipCompressor(Compressor):
     compresses repetitive pod logs harder at a small CPU cost.
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         *,
         max_legend_entries: int = 128,

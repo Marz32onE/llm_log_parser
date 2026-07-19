@@ -30,10 +30,14 @@ tokens = [
   "tiktoken>=0.8",
 ]
 dev = [
+  "black>=25.1",
+  "flake8>=7.1",
+  "Flake8-pyproject>=1.2",
+  "isort>=5.13",
   "mypy>=1.14",
+  "pylint>=3.3",
   "pytest>=8.0",
   "pytest-cov>=6.0",
-  "ruff>=0.9",
   "tiktoken>=0.8",
 ]
 
@@ -46,42 +50,40 @@ packages = ["src/llmlogs"]
 [tool.hatch.build.targets.sdist]
 include = ["src/llmlogs", "tests", "README.md", "LICENSE"]
 
-[tool.ruff]
-target-version = "py310"
+[tool.black]
+target-version = ["py310"]
 line-length = 100
-src = ["src", "tests"]
 
-[tool.ruff.lint]
-select = [
-  "E",    # pycodestyle errors
-  "W",    # pycodestyle warnings
-  "F",    # pyflakes
-  "I",    # isort
-  "B",    # flake8-bugbear
-  "UP",   # pyupgrade
-  "SIM",  # flake8-simplify
-  "RUF",  # ruff-specific
-  "N",    # pep8-naming
-  "ANN",  # flake8-annotations
-  "S",    # flake8-bandit (security)
-  "C4",   # flake8-comprehensions
-  "PTH",  # flake8-use-pathlib
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src", "tests"]
+known_first_party = ["llmlogs"]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203"]  # black-compatible (slice whitespace)
+exclude = [".venv", "build", "dist", ".git"]
+
+[tool.pylint.main]
+jobs = 0
+py-version = "3.10"
+source-roots = ["src"]
+ignore-paths = [".venv", "build", "dist"]
+
+[tool.pylint.messages_control]
+# Only globally disable checks the community treats as too strict by default.
+# Everything else: fix the code, or `# pylint: disable=...` at the call site.
+disable = [
+  "C0114",  # missing-module-docstring
+  "C0115",  # missing-class-docstring
+  "C0116",  # missing-function-docstring
+  "R0903",  # too-few-public-methods (data holders / Protocol stubs)
+  "W0511",  # fixme
 ]
-ignore = [
-  "S101",  # assert allowed in tests; gated via per-file-ignores
-]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ANN201", "ANN001"]
-"src/llmlogs/cli.py" = ["T201"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["llmlogs"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "lf"
+[tool.pylint.format]
+max-line-length = 100
 
 [tool.mypy]
 python_version = "3.10"

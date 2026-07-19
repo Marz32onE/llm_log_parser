@@ -5,10 +5,14 @@ install:
 	uv pip install -e ".[dev]"
 
 format:
-	.venv/bin/ruff format src tests
+	.venv/bin/isort src tests
+	.venv/bin/black src tests
 
 lint:
-	.venv/bin/ruff check src tests
+	.venv/bin/isort --check-only --diff src tests
+	.venv/bin/black --check --diff src tests
+	.venv/bin/flake8 src tests
+	.venv/bin/pylint src/llmlogs
 
 typecheck:
 	.venv/bin/mypy

@@ -25,12 +25,13 @@ class _Encoding(Protocol):
 @lru_cache(maxsize=1)
 def _load_encoding() -> _Encoding | None:
     try:
-        import tiktoken
+        import tiktoken  # pylint: disable=import-outside-toplevel
     except ImportError:
         return None
     try:
         encoding: _Encoding = tiktoken.get_encoding(_ENCODING_NAME)
-    except Exception:  # encoding fetch may fail offline; token metrics are optional
+    except (ValueError, OSError, RuntimeError):
+        # Optional metrics must degrade, not crash (missing/corrupt encoding cache).
         return None
     return encoding
 
