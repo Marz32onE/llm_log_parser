@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -17,6 +18,26 @@ class Algorithm(str, Enum):
 
     LOGZIP = "logzip"
     DRAIN3 = "drain3"
+
+
+_ISO_Z_TS = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)Z$")
+
+
+def split_iso_z(time: str) -> tuple[str, str] | None:
+    """Split ``2026-07-18T09:15:01.123Z`` into ``("2026-07-18", "09:15:01.123")``.
+
+    Returns None when the value is not a UTC (``Z``) ISO-8601 timestamp, so
+    callers can fall back to the verbatim string.
+    """
+    match = _ISO_Z_TS.match(time)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def escape_message(message: str) -> str:
+    """Escape embedded newlines so a message stays on one physical line."""
+    return message.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
 
 
 class LogEntry(BaseModel):
@@ -48,8 +69,7 @@ class LogEntry(BaseModel):
 
         Embedded newlines in the message are escaped as ``\\n``.
         """
-        message = self.message.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
-        return f"{self.time} {message}"
+        return f"{self.time} {escape_message(self.message)}"
 
 
 class PodLogs(BaseModel):
@@ -76,15 +96,44 @@ class PodLogs(BaseModel):
     def to_text(self) -> str:
         """Render LLM-oriented text: pod header once, then ``time message`` lines.
 
-        Format (token-saving — pod name is not repeated per line)::
+        When every entry carries a UTC (``Z``) ISO timestamp on the same date,
+        the date is factored into the header and lines keep only the clock time
+        (lossless: original = ``{date}T{time}Z``). Full ISO timestamps cost
+        ~16 LLM tokens per line; the short form costs ~8::
 
-            # pod: checkout-7d9f8b6c4-xk2m1
-            2026-07-18T09:15:01.123Z request method=GET path=/api/v1/health ...
-            2026-07-18T09:15:01.456Z request method=GET path=/api/v1/health ...
+            # pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18
+            09:15:01.123 request method=GET path=/api/v1/health ...
+            09:15:01.456 request method=GET path=/api/v1/health ...
+
+        Entries with non-ISO or multi-date timestamps fall back to full
+        ``{time} {message}`` lines under a plain ``# pod: {name}`` header.
         """
+        compact = self._compact_lines()
+        if compact is not None:
+            return "\n".join(compact)
         lines = [f"# pod: {self.pod_name}"]
         lines.extend(entry.to_line() for entry in self.logs)
         return "\n".join(lines)
+
+    def _compact_lines(self) -> list[str] | None:
+        """Short-timestamp rendering, or None when it would be lossy."""
+        if not self.logs:
+            return None
+        splits: list[tuple[str, str]] = []
+        for entry in self.logs:
+            split = split_iso_z(entry.time)
+            if split is None:
+                return None
+            splits.append(split)
+        dates = {date for date, _ in splits}
+        if len(dates) != 1:
+            return None
+        lines = [f"# pod: {self.pod_name} date: {splits[0][0]}"]
+        lines.extend(
+            f"{clock} {escape_message(entry.message)}"
+            for (_, clock), entry in zip(splits, self.logs, strict=True)
+        )
+        return lines
 
     @property
     def line_count(self) -> int:
@@ -285,7 +334,14 @@ def _first_present(row: Mapping[str, object], keys: Sequence[str]) -> object | N
 
 @dataclass(frozen=True, slots=True)
 class CompressionResult:
-    """Outcome of compressing a log payload with a single algorithm."""
+    """Outcome of compressing a log payload with a single algorithm.
+
+    ``original_tokens``/``compressed_tokens`` are LLM token counts (None when
+    no token counter is available). Bytes and tokens diverge sharply on
+    compressed output — legend references like ``#a#`` are byte-cheap but
+    token-expensive — so token fields are the metric that matters for LLM
+    input cost.
+    """
 
     algorithm: Algorithm
     original_bytes: int
@@ -293,6 +349,8 @@ class CompressionResult:
     compressed_text: str
     duration_ms: float
     metadata: dict[str, Any] = field(default_factory=dict)
+    original_tokens: int | None = None
+    compressed_tokens: int | None = None
 
     @property
     def ratio(self) -> float:
@@ -308,12 +366,28 @@ class CompressionResult:
             return 0.0
         return (1.0 - self.ratio) * 100.0
 
+    @property
+    def token_saved_percent(self) -> float | None:
+        """Percentage of original LLM tokens removed (None without counts)."""
+        if self.original_tokens is None or self.compressed_tokens is None:
+            return None
+        if self.original_tokens == 0:
+            return 0.0
+        return (1.0 - self.compressed_tokens / self.original_tokens) * 100.0
+
     def summary(self) -> str:
         """Human-readable one-line summary."""
-        return (
+        text = (
             f"{self.algorithm.value}: {self.original_bytes} -> {self.compressed_bytes} bytes "
             f"({self.saved_percent:.1f}% saved, {self.duration_ms:.2f} ms)"
         )
+        token_saved = self.token_saved_percent
+        if token_saved is not None:
+            text += (
+                f"; tokens {self.original_tokens} -> {self.compressed_tokens} "
+                f"({token_saved:.1f}% saved)"
+            )
+        return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,23 +398,38 @@ class ComparisonResult:
     record_count: int
     results: dict[Algorithm, CompressionResult]
 
+    @property
+    def original_tokens(self) -> int | None:
+        """LLM token count of the shared rendered input (None without counts)."""
+        for result in self.results.values():
+            if result.original_tokens is not None:
+                return result.original_tokens
+        return None
+
     def best(self) -> CompressionResult:
-        """Return the result with the fewest compressed bytes."""
+        """Return the cheapest result: by LLM tokens when counted, else bytes."""
         if not self.results:
             msg = "No compression results available"
             raise ValueError(msg)
-        return min(self.results.values(), key=lambda item: item.compressed_bytes)
+        results = list(self.results.values())
+        if all(result.compressed_tokens is not None for result in results):
+            return min(results, key=lambda item: item.compressed_tokens or 0)
+        return min(results, key=lambda item: item.compressed_bytes)
 
     def summary(self) -> str:
         """Multi-line human-readable comparison summary."""
-        lines = [
-            f"records: {self.record_count}",
-            f"original: {self.original_bytes} bytes",
-        ]
+        original = f"original: {self.original_bytes} bytes"
+        if self.original_tokens is not None:
+            original += f", {self.original_tokens} tokens"
+        lines = [f"records: {self.record_count}", original]
         for algorithm in Algorithm:
             result = self.results.get(algorithm)
             if result is not None:
                 lines.append(f"  {result.summary()}")
         best = self.best()
-        lines.append(f"best: {best.algorithm.value} ({best.saved_percent:.1f}% saved)")
+        token_saved = best.token_saved_percent
+        if token_saved is not None:
+            lines.append(f"best: {best.algorithm.value} ({token_saved:.1f}% tokens saved)")
+        else:
+            lines.append(f"best: {best.algorithm.value} ({best.saved_percent:.1f}% saved)")
         return "\n".join(lines)

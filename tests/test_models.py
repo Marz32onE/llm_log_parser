@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -57,6 +58,50 @@ def test_pod_logs_model_and_to_text() -> None:
     assert "t2 world" in text
     # pod name appears once (token-saving), not on every line
     assert text.count("checkout-abc") == 1
+
+
+def test_to_text_factors_single_utc_date_into_header() -> None:
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry(time="2026-07-18T09:15:01.123Z", message="hello"),
+            LogEntry(time="2026-07-18T09:15:02Z", message="multi\nline"),
+        ],
+    )
+    text = pod.to_text()
+    lines = text.splitlines()
+    assert lines[0] == "# pod: app-0 date: 2026-07-18"
+    assert lines[1] == "09:15:01.123 hello"
+    assert lines[2] == "09:15:02 multi\\nline"
+    # Lossless: original timestamp = {date}T{clock}Z
+    assert f"2026-07-18T{lines[1].split(' ')[0]}Z" == pod.logs[0].time
+
+
+def test_to_text_keeps_full_timestamps_across_dates() -> None:
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry(time="2026-07-18T23:59:59Z", message="before midnight"),
+            LogEntry(time="2026-07-19T00:00:01Z", message="after midnight"),
+        ],
+    )
+    text = pod.to_text()
+    assert text.splitlines()[0] == "# pod: app-0"
+    assert "2026-07-18T23:59:59Z before midnight" in text
+    assert "2026-07-19T00:00:01Z after midnight" in text
+
+
+def test_to_text_keeps_non_iso_or_offset_timestamps() -> None:
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry(time="2026-07-18T09:15:01+08:00", message="offset tz"),
+            LogEntry(time="2026-07-18T09:15:02Z", message="utc"),
+        ],
+    )
+    text = pod.to_text()
+    assert "2026-07-18T09:15:01+08:00 offset tz" in text
+    assert "date:" not in text
 
 
 def test_pod_logs_aliases() -> None:
@@ -208,6 +253,52 @@ def test_compression_result_summary_contains_algorithm() -> None:
     summary = _result(Algorithm.LOGZIP, 500).summary()
     assert "logzip" in summary
     assert "500" in summary
+
+
+def test_compression_result_token_fields_default_none() -> None:
+    result = _result(Algorithm.LOGZIP, 400)
+    assert result.original_tokens is None
+    assert result.compressed_tokens is None
+    assert result.token_saved_percent is None
+    assert "tokens" not in result.summary()
+
+
+def test_compression_result_token_saved_percent_and_summary() -> None:
+    result = replace(_result(Algorithm.LOGZIP, 400), original_tokens=200, compressed_tokens=150)
+    assert result.token_saved_percent == pytest.approx(25.0)
+    assert "tokens 200 -> 150 (25.0% saved)" in result.summary()
+
+
+def test_compression_result_token_saved_percent_zero_original() -> None:
+    result = replace(_result(Algorithm.LOGZIP, 400), original_tokens=0, compressed_tokens=0)
+    assert result.token_saved_percent == 0.0
+
+
+def test_comparison_result_best_prefers_tokens_over_bytes() -> None:
+    # logzip wins on bytes, drain3 wins on tokens — tokens must decide.
+    logzip = replace(_result(Algorithm.LOGZIP, 300), original_tokens=200, compressed_tokens=180)
+    drain3 = replace(_result(Algorithm.DRAIN3, 500), original_tokens=200, compressed_tokens=120)
+    comparison = ComparisonResult(
+        original_bytes=1000,
+        record_count=10,
+        results={Algorithm.LOGZIP: logzip, Algorithm.DRAIN3: drain3},
+    )
+    assert comparison.best().algorithm is Algorithm.DRAIN3
+    assert comparison.original_tokens == 200
+    summary = comparison.summary()
+    assert "original: 1000 bytes, 200 tokens" in summary
+    assert "best: drain3 (40.0% tokens saved)" in summary
+
+
+def test_comparison_result_falls_back_to_bytes_without_tokens() -> None:
+    logzip = replace(_result(Algorithm.LOGZIP, 300), original_tokens=200, compressed_tokens=180)
+    drain3 = _result(Algorithm.DRAIN3, 500)  # no token counts
+    comparison = ComparisonResult(
+        original_bytes=1000,
+        record_count=10,
+        results={Algorithm.LOGZIP: logzip, Algorithm.DRAIN3: drain3},
+    )
+    assert comparison.best().algorithm is Algorithm.LOGZIP
 
 
 def test_comparison_result_best_and_summary() -> None:

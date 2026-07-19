@@ -72,6 +72,56 @@ def test_cli_compare_json_and_artifacts(
     assert (artifacts / "drain3.out").exists()
 
 
+def test_cli_digest_stdout(sample_pod_logs_path: Path, capsys) -> None:
+    code = main(["digest", "-i", str(sample_pod_logs_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("# log digest:")
+    assert "## patterns" in out
+    assert "payment failed order_id=ord-98421" in out
+
+
+def test_cli_digest_file_output_with_stats(
+    sample_pod_logs_path: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_file = tmp_path / "digest.txt"
+    code = main(
+        [
+            "digest",
+            "-i",
+            str(sample_pod_logs_path),
+            "-o",
+            str(out_file),
+            "--stats",
+            "--rare-threshold",
+            "2",
+            "--max-values",
+            "3",
+        ]
+    )
+    assert code == 0
+    assert out_file.read_text(encoding="utf-8").startswith("# log digest:")
+    err = capsys.readouterr().err
+    assert "digest:" in err
+    assert "bytes" in err
+
+
+def test_cli_compare_report_includes_token_fields(
+    sample_pod_logs_path: Path,
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "report.json"
+    code = main(["compare", "-i", str(sample_pod_logs_path), "-o", str(report)])
+    assert code == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert "original_tokens" in payload
+    for result in payload["results"].values():
+        assert "compressed_tokens" in result
+        assert "token_saved_percent" in result
+
+
 def test_cli_empty_input_returns_error(tmp_path: Path) -> None:
     empty = tmp_path / "empty.json"
     empty.write_text("   \n", encoding="utf-8")

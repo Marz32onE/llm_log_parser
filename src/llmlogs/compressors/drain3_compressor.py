@@ -12,6 +12,25 @@ from llmlogs.compressors.base import Compressor
 from llmlogs.models import Algorithm
 
 
+def build_template_miner(
+    *,
+    sim_th: float = 0.4,
+    depth: int = 4,
+    max_children: int = 100,
+    max_clusters: int | None = None,
+    extra_delimiters: list[str] | None = None,
+) -> TemplateMiner:
+    """Build an in-memory drain3 miner (no persistence; one-shot jobs)."""
+    config = TemplateMinerConfig()
+    config.drain_sim_th = sim_th
+    config.drain_depth = depth
+    config.drain_max_children = max_children
+    config.drain_max_clusters = max_clusters
+    config.drain_extra_delimiters = list(extra_delimiters or [])
+    config.profiling_enabled = False
+    return TemplateMiner(config=config)
+
+
 class Drain3Compressor(Compressor):
     """Compress logs by mining drain3 templates and encoding line references.
 
@@ -43,15 +62,13 @@ class Drain3Compressor(Compressor):
         return Algorithm.DRAIN3
 
     def _build_miner(self) -> TemplateMiner:
-        config = TemplateMinerConfig()
-        config.drain_sim_th = self._sim_th
-        config.drain_depth = self._depth
-        config.drain_max_children = self._max_children
-        config.drain_max_clusters = self._max_clusters
-        config.drain_extra_delimiters = self._extra_delimiters
-        config.profiling_enabled = False
-        # In-memory only; no persistence for one-shot compression jobs.
-        return TemplateMiner(config=config)
+        return build_template_miner(
+            sim_th=self._sim_th,
+            depth=self._depth,
+            max_children=self._max_children,
+            max_clusters=self._max_clusters,
+            extra_delimiters=self._extra_delimiters,
+        )
 
     def _compress(self, text: str) -> tuple[str, dict[str, object]]:
         miner = self._build_miner()

@@ -33,6 +33,16 @@ def test_compare_algorithms_json_string(sample_pod_logs_json: str) -> None:
     assert Algorithm.LOGZIP in comparison.results
 
 
+def test_compare_algorithms_token_counter(sample_pod_rows: list[dict[str, str]]) -> None:
+    comparison = compare_algorithms(sample_pod_rows, token_counter=lambda text: len(text))
+    for result in comparison.results.values():
+        assert result.original_tokens == comparison.original_tokens
+        assert result.compressed_tokens == len(result.compressed_text)
+    # With per-character counting, best-by-tokens equals best-by-bytes order.
+    assert comparison.best().algorithm in set(comparison.results)
+    assert "tokens" in comparison.summary()
+
+
 def test_compare_algorithms_empty_raises() -> None:
     import pytest
 

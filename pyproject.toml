@@ -26,11 +26,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tokens = [
+  "tiktoken>=0.8",
+]
 dev = [
   "mypy>=1.14",
   "pytest>=8.0",
   "pytest-cov>=6.0",
   "ruff>=0.9",
+  "tiktoken>=0.8",
 ]
 
 [project.scripts]
@@ -94,7 +98,7 @@ mypy_path = "src"
 packages = ["llmlogs"]
 
 [[tool.mypy.overrides]]
-module = ["drain3", "drain3.*", "logzip", "logzip.*"]
+module = ["drain3", "drain3.*", "logzip", "logzip.*", "tiktoken", "tiktoken.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

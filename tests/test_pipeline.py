@@ -84,6 +84,30 @@ def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
     assert result.metadata["line_count"] == 2
 
 
+def test_compress_logs_injected_token_counter(sample_pod_rows: list[dict[str, str]]) -> None:
+    counter_calls: list[str] = []
+
+    def fake_counter(text: str) -> int:
+        counter_calls.append(text)
+        return len(text.split())
+
+    result = compress_logs(sample_pod_rows, "drain3", token_counter=fake_counter)
+    assert len(counter_calls) == 2
+    assert result.original_tokens == len(counter_calls[0].split())
+    assert result.compressed_tokens == len(counter_calls[1].split())
+    assert counter_calls[1] == result.compressed_text
+    assert "tokens" in result.summary()
+
+
+def test_compress_logs_default_token_counter_optional(
+    sample_pod_rows: list[dict[str, str]],
+) -> None:
+    # With tiktoken installed the fields are ints; without it they are None.
+    result = compress_logs(sample_pod_rows, "logzip")
+    assert result.original_tokens is None or result.original_tokens > 0
+    assert (result.original_tokens is None) == (result.compressed_tokens is None)
+
+
 def test_compress_logs_empty_raises() -> None:
     with pytest.raises(ValueError, match="No pod log records"):
         compress_logs([], "logzip")
