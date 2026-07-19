@@ -275,6 +275,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "digest":
             return _run_digest(args, pods)
         return _run_compare(args, pods)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 2

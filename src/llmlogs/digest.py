@@ -23,7 +23,7 @@ from llmlogs.models import (
     PodLogs,
     escape_message,
     normalize_pod_logs,
-    split_iso_z,
+    split_timestamp,
 )
 from llmlogs.pipeline import LogRows
 
@@ -37,13 +37,31 @@ _HEADER = (
 )
 
 
+_DEFAULT_ALWAYS_LIST_KEYS = frozenset({"status", "code", "level", "severity"})
+
+
 @dataclass(frozen=True, slots=True)
 class DigestOptions:
-    """Tuning knobs for digest rendering."""
+    """Tuning knobs for digest rendering.
+
+    ``always_list_keys`` names ``key=value`` keys whose values are categories,
+    not magnitudes — they are always listed with counts and never collapsed
+    into a numeric range, so a rare ``status=404`` stays visible no matter how
+    many distinct values the slot holds.
+    """
 
     rare_threshold: int = 3
     max_values: int = 4
     sim_th: float = 0.4
+    always_list_keys: frozenset[str] = _DEFAULT_ALWAYS_LIST_KEYS
+
+    def __post_init__(self) -> None:
+        if self.rare_threshold < 0:
+            msg = f"rare_threshold must be >= 0 (got {self.rare_threshold})"
+            raise ValueError(msg)
+        if self.max_values < 1:
+            msg = f"max_values must be >= 1 (got {self.max_values})"
+            raise ValueError(msg)
 
 
 def digest_logs(
@@ -79,13 +97,20 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
     date = _shared_date(entries)
     header = f"# pod: {pod.pod_name}" if date is None else f"# pod: {pod.pod_name} date: {date}"
 
+    # With a factored date, zero-padded clocks compare lexicographically, so
+    # the span is a true min/max even for unsorted input. Arbitrary time
+    # strings don't order reliably; those keep first-seen/last-seen.
     slot_values: dict[int, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
     first_time: dict[int, str] = {}
     last_time: dict[int, str] = {}
     for entry, cluster_id in zip(entries, cluster_ids, strict=True):
         clock = _clock(entry.time, date)
-        first_time.setdefault(cluster_id, clock)
-        last_time[cluster_id] = clock
+        if date is None:
+            first_time.setdefault(cluster_id, clock)
+            last_time[cluster_id] = clock
+        else:
+            first_time[cluster_id] = min(clock, first_time.get(cluster_id, clock))
+            last_time[cluster_id] = max(clock, last_time.get(cluster_id, clock))
         if counts[cluster_id] <= opts.rare_threshold:
             continue
         params = miner.extract_parameters(
@@ -101,7 +126,9 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
             continue
         rendered = legend[cluster_id]
         for slot in sorted(slot_values[cluster_id]):
-            summary = _summarize_slot(slot_values[cluster_id][slot], opts.max_values)
+            summary = _summarize_slot(
+                slot_values[cluster_id][slot], opts.max_values, opts.always_list_keys
+            )
             rendered = rendered.replace("<*>", summary, 1)
         span = f"{first_time[cluster_id]}-{last_time[cluster_id]}"
         patterns.append(f"x{count} {span} {rendered}")
@@ -122,14 +149,16 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
 
 
 def _shared_date(entries: Sequence[LogEntry]) -> str | None:
-    """The single UTC date shared by every entry, or None."""
+    """The single date (in a single timestamp form) shared by every entry, or None."""
     dates = set()
+    forms = set()
     for entry in entries:
-        split = split_iso_z(entry.time)
+        split = split_timestamp(entry.time)
         if split is None:
             return None
-        dates.add(split[0])
-    if len(dates) != 1:
+        dates.add(split.date)
+        forms.add(split.form)
+    if len(dates) != 1 or len(forms) != 1:
         return None
     return next(iter(dates))
 
@@ -138,19 +167,25 @@ def _clock(time: str, date: str | None) -> str:
     """Short clock time when the pod's date was factored out, else verbatim."""
     if date is None:
         return time
-    split = split_iso_z(time)
+    split = split_timestamp(time)
     if split is None:
         return time
-    return split[1]
+    return split.clock
 
 
-def _summarize_slot(values: list[str], max_values: int) -> str:
+def _summarize_slot(
+    values: list[str],
+    max_values: int,
+    always_list_keys: frozenset[str] = _DEFAULT_ALWAYS_LIST_KEYS,
+) -> str:
     """Summarize one ``<*>`` slot's observed values for the pattern line.
 
     Few distinct values are always listed with counts — collapsing e.g.
     ``status=200``/``status=404`` into ``status=200..404`` would hide the rare
     error signal. Numeric ranges only kick in past ``max_values`` distinct
-    values, where listing would be noise (latencies, row counts, ids).
+    values, where listing would be noise (latencies, row counts, ids) — and
+    never for ``always_list_keys``, whose numeric-looking values are
+    categories: those are listed exhaustively with counts instead.
     """
     if not values:
         return "<*>"
@@ -163,10 +198,16 @@ def _summarize_slot(values: list[str], max_values: int) -> str:
         if all(match is not None for match in kv_matches):
             keys = {match.group(1) for match in kv_matches if match is not None}
             if len(keys) == 1:
+                key = next(iter(keys))
+                if key[:-1].lower() in always_list_keys:
+                    listed = ", ".join(
+                        f"{value} x{count}" for value, count in counter.most_common()
+                    )
+                    return f"<{listed}>"
                 numbers = [match.group(2) for match in kv_matches if match is not None]
                 low = min(numbers, key=float)
                 high = max(numbers, key=float)
-                return f"{next(iter(keys))}{low}..{high}"
+                return f"{key}{low}..{high}"
         if all(_NUM_RE.fullmatch(value) for value in values):
             return f"{min(values, key=float)}..{max(values, key=float)}"
         if counter.most_common(1)[0][1] == 1:

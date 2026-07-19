@@ -108,6 +108,17 @@ def test_cli_digest_file_output_with_stats(
     assert "bytes" in err
 
 
+def test_cli_digest_invalid_max_values_returns_error(
+    sample_pod_logs_path: Path,
+    capsys,
+) -> None:
+    code = main(["digest", "-i", str(sample_pod_logs_path), "--max-values", "0"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "max_values" in err
+
+
 def test_cli_compare_report_includes_token_fields(
     sample_pod_logs_path: Path,
     tmp_path: Path,

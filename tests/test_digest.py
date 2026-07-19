@@ -92,6 +92,43 @@ def test_digest_logs_empty_raises() -> None:
         digest_logs([])
 
 
+def test_summarize_slot_status_never_range_collapses_past_max_values() -> None:
+    # Regression (review finding): with distinct > max_values, same-key numeric
+    # values collapsed to "status=200..404" and hid the rare error.
+    values = ["status=200"] * 20 + ["status=201", "status=202", "status=203", "status=404"]
+    summary = _summarize_slot(values, 3)
+    assert ".." not in summary
+    assert "status=200 x20" in summary
+    assert "status=404 x1" in summary
+
+
+def test_summarize_slot_always_list_keys_configurable() -> None:
+    values = ["status=200"] * 20 + ["status=201", "status=202", "status=203", "status=404"]
+    assert _summarize_slot(values, 3, frozenset()) == "status=200..404"
+    codes = [f"code={i}" for i in (7, 3, 99, 12, 55)]
+    assert ".." not in _summarize_slot(codes, 3)
+
+
+def test_digest_pattern_span_is_min_max_for_unsorted_iso_input() -> None:
+    # Regression (review finding): encounter order rendered inverted spans.
+    pod = PodLogs(
+        pod_name="p",
+        logs=[
+            LogEntry(time=f"2026-07-18T09:15:0{s}Z", message=f"req path=/x{s} ok")
+            for s in (5, 3, 4, 1)
+        ],
+    )
+    digest = digest_pods([pod])
+    assert "x4 09:15:01-09:15:05 req" in digest
+
+
+def test_digest_options_validation() -> None:
+    with pytest.raises(ValueError, match="rare_threshold"):
+        DigestOptions(rare_threshold=-1)
+    with pytest.raises(ValueError, match="max_values"):
+        DigestOptions(max_values=0)
+
+
 def test_summarize_slot_rules() -> None:
     assert _summarize_slot([], 4) == "<*>"
     assert _summarize_slot(["a", "a"], 4) == "a"

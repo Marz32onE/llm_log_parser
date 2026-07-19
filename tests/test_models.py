@@ -91,6 +91,52 @@ def test_to_text_keeps_full_timestamps_across_dates() -> None:
     assert "2026-07-19T00:00:01Z after midnight" in text
 
 
+def test_to_text_factors_utc_offset_form() -> None:
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry(time="2026-07-18T09:15:01+00:00", message="a"),
+            LogEntry(time="2026-07-18T09:15:02.500+00:00", message="b"),
+        ],
+    )
+    lines = pod.to_text().splitlines()
+    assert lines[0] == "# pod: app-0 date: 2026-07-18"
+    assert lines[1] == "09:15:01 a"
+    assert lines[2] == "09:15:02.500 b"
+
+
+def test_to_text_factors_clickhouse_naive_datetime_form() -> None:
+    # ClickHouse client rows carry datetime objects; LogEntry coerces them via
+    # str(), producing the space-separated timezone-naive shape.
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry.model_validate({"time": datetime(2026, 7, 18, 9, 15, 1), "message": "a"}),
+            LogEntry.model_validate({"time": datetime(2026, 7, 18, 9, 15, 2), "message": "b"}),
+        ],
+    )
+    lines = pod.to_text().splitlines()
+    assert lines[0] == "# pod: app-0 date: 2026-07-18"
+    assert lines[1] == "09:15:01 a"
+    assert lines[2] == "09:15:02 b"
+
+
+def test_to_text_mixed_timestamp_forms_fall_back() -> None:
+    # Same date but different forms (Z vs naive) — factoring would make the
+    # original strings ambiguous, so full timestamps are kept.
+    pod = PodLogs(
+        pod_name="app-0",
+        logs=[
+            LogEntry(time="2026-07-18T09:15:01Z", message="a"),
+            LogEntry(time="2026-07-18 09:15:02", message="b"),
+        ],
+    )
+    text = pod.to_text()
+    assert "date:" not in text
+    assert "2026-07-18T09:15:01Z a" in text
+    assert "2026-07-18 09:15:02 b" in text
+
+
 def test_to_text_keeps_non_iso_or_offset_timestamps() -> None:
     pod = PodLogs(
         pod_name="app-0",

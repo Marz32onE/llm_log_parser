@@ -8,7 +8,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -20,19 +20,36 @@ class Algorithm(str, Enum):
     DRAIN3 = "drain3"
 
 
-_ISO_Z_TS = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)Z$")
+_SPLITTABLE_TS = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})([T ])(\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)(Z|\+00:00)?$"
+)
 
 
-def split_iso_z(time: str) -> tuple[str, str] | None:
-    """Split ``2026-07-18T09:15:01.123Z`` into ``("2026-07-18", "09:15:01.123")``.
+class TimestampParts(NamedTuple):
+    """A timestamp split for date factoring."""
 
-    Returns None when the value is not a UTC (``Z``) ISO-8601 timestamp, so
-    callers can fall back to the verbatim string.
+    date: str
+    clock: str
+    form: str
+    """Separator + timezone suffix (e.g. ``"TZ"``, ``" "``); lines can only be
+    compacted together when every timestamp in the pod shares one form, so the
+    original strings stay reconstructable as ``{date}{sep}{clock}{suffix}``."""
+
+
+def split_timestamp(time: str) -> TimestampParts | None:
+    """Split a factorable timestamp into date, clock, and form.
+
+    Accepted forms (`sep` is ``T`` or a space): ``{date}{sep}{clock}`` with a
+    ``Z`` suffix, a ``+00:00`` suffix, or no suffix at all (timezone-naive —
+    the common ClickHouse ``str(datetime)`` shape). Anything else — e.g. a
+    non-UTC offset like ``+08:00`` — returns None so callers keep the
+    verbatim string.
     """
-    match = _ISO_Z_TS.match(time)
+    match = _SPLITTABLE_TS.match(time)
     if match is None:
         return None
-    return match.group(1), match.group(2)
+    date, sep, clock, suffix = match.groups()
+    return TimestampParts(date=date, clock=clock, form=f"{sep}{suffix or ''}")
 
 
 def escape_message(message: str) -> str:
@@ -96,16 +113,20 @@ class PodLogs(BaseModel):
     def to_text(self) -> str:
         """Render LLM-oriented text: pod header once, then ``time message`` lines.
 
-        When every entry carries a UTC (``Z``) ISO timestamp on the same date,
-        the date is factored into the header and lines keep only the clock time
-        (lossless: original = ``{date}T{time}Z``). Full ISO timestamps cost
-        ~16 LLM tokens per line; the short form costs ~8::
+        When every entry shares one date and one timestamp form — ISO with a
+        ``Z`` or ``+00:00`` suffix, or timezone-naive with ``T`` or space
+        separator (the ClickHouse ``str(datetime)`` shape) — the date is
+        factored into the header and lines keep only the clock time
+        (reconstructable: original = ``{date}{sep}{clock}{suffix}`` with the
+        pod's single form). A full ISO timestamp costs ~16 LLM tokens per
+        line; the short form ~8::
 
             # pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18
             09:15:01.123 request method=GET path=/api/v1/health ...
             09:15:01.456 request method=GET path=/api/v1/health ...
 
-        Entries with non-ISO or multi-date timestamps fall back to full
+        Entries with other timestamp shapes (non-UTC offsets, non-ISO
+        strings), multiple dates, or mixed forms fall back to full
         ``{time} {message}`` lines under a plain ``# pod: {name}`` header.
         """
         compact = self._compact_lines()
@@ -116,22 +137,23 @@ class PodLogs(BaseModel):
         return "\n".join(lines)
 
     def _compact_lines(self) -> list[str] | None:
-        """Short-timestamp rendering, or None when it would be lossy."""
+        """Short-timestamp rendering, or None when it would be ambiguous."""
         if not self.logs:
             return None
-        splits: list[tuple[str, str]] = []
+        splits: list[TimestampParts] = []
         for entry in self.logs:
-            split = split_iso_z(entry.time)
+            split = split_timestamp(entry.time)
             if split is None:
                 return None
             splits.append(split)
-        dates = {date for date, _ in splits}
-        if len(dates) != 1:
+        if len({parts.date for parts in splits}) != 1:
             return None
-        lines = [f"# pod: {self.pod_name} date: {splits[0][0]}"]
+        if len({parts.form for parts in splits}) != 1:
+            return None
+        lines = [f"# pod: {self.pod_name} date: {splits[0].date}"]
         lines.extend(
-            f"{clock} {escape_message(entry.message)}"
-            for (_, clock), entry in zip(splits, self.logs, strict=True)
+            f"{parts.clock} {escape_message(entry.message)}"
+            for parts, entry in zip(splits, self.logs, strict=True)
         )
         return lines
 
