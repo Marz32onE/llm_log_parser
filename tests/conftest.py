@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from llmlogs.models import PodLogs, normalize_pod_logs
+from llmlogs.models import PodLogs, parse_pod_logs
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -35,4 +35,4 @@ def sample_pod_rows(sample_pod_logs_json: str) -> list[dict[str, str]]:
 @pytest.fixture
 def sample_pod_logs(sample_pod_rows: list[dict[str, str]]) -> list[PodLogs]:
     """Typed PodLogs (pod_name + logs) grouped from flat fixture rows."""
-    return normalize_pod_logs(sample_pod_rows)
+    return parse_pod_logs(sample_pod_rows)

@@ -23,11 +23,10 @@ from llmlogs.compressors.drain3_compressor import build_template_miner
 from llmlogs.models import (
     LogEntry,
     PodLogs,
+    ensure_pod_logs,
     escape_message,
-    normalize_pod_logs,
     split_timestamp,
 )
-from llmlogs.pipeline import LogRows
 
 _NUM = r"-?\d+(?:\.\d+)?"
 _NUM_RE = re.compile(_NUM)
@@ -88,24 +87,18 @@ class _ClusterTimeline:
     first_index: dict[int, int]
 
 
-def digest_logs(
-    rows: LogRows,
-    *,
-    pod_name: str | None = None,
-    options: DigestOptions | None = None,
-) -> str:
-    """Digest pod logs from any accepted input shape (see ``compress_logs``)."""
-    pods = normalize_pod_logs(rows, pod_name=pod_name)
-    if sum(pod.line_count for pod in pods) == 0:
+def digest_logs(pods: Sequence[PodLogs], *, options: DigestOptions | None = None) -> str:
+    """Render a per-pod digest of recurring patterns and rare verbatim lines.
+
+    Takes a list of ``PodLogs`` (convert JSON strings or flat ClickHouse rows
+    with ``parse_pod_logs`` first).
+    """
+    pod_list = ensure_pod_logs(pods)
+    if sum(pod.line_count for pod in pod_list) == 0:
         msg = "No pod log records to digest"
         raise ValueError(msg)
-    return digest_pods(pods, options=options)
-
-
-def digest_pods(pods: Sequence[PodLogs], *, options: DigestOptions | None = None) -> str:
-    """Render a per-pod digest of recurring patterns and rare verbatim lines."""
     opts = options or DigestOptions()
-    blocks = [_digest_pod(pod, opts) for pod in pods if pod.line_count > 0]
+    blocks = [_digest_pod(pod, opts) for pod in pod_list if pod.line_count > 0]
     return "\n\n".join([_HEADER, *blocks])
 
 

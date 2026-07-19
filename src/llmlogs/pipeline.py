@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
 
 from llmlogs.compressors import Compressor, Drain3Compressor, LogzipCompressor
 from llmlogs.models import (
@@ -12,7 +11,7 @@ from llmlogs.models import (
     Algorithm,
     CompressionResult,
     PodLogs,
-    normalize_pod_logs,
+    ensure_pod_logs,
     pod_logs_to_text,
     total_log_count,
 )
@@ -22,8 +21,6 @@ _DEFAULT_COMPRESSORS: dict[Algorithm, type[Compressor]] = {
     Algorithm.LOGZIP: LogzipCompressor,
     Algorithm.DRAIN3: Drain3Compressor,
 }
-
-LogRows = Sequence[PodLogs | Mapping[str, Any]] | Mapping[str, Any] | str | PodLogs
 
 
 def coerce_algorithm(algorithm: Algorithm | str) -> Algorithm:
@@ -71,25 +68,22 @@ def compress_text(
 
 
 def compress_logs(
-    rows: LogRows,
+    pods: Sequence[PodLogs],
     algorithm: Algorithm | str,
     *,
-    pod_name: str | None = None,
     token_counter: TokenCounter | None = None,
     **kwargs: object,
 ) -> CompressionResult:
-    """Compress ClickHouse pod logs with the selected algorithm.
+    """Compress pod logs with the selected algorithm.
 
     This is the main library entry point for single-algorithm compression.
+    It takes exactly one input shape — a list of ``PodLogs`` — so there is
+    no guessing about what to pass; convert JSON strings or flat ClickHouse
+    rows with ``parse_pod_logs`` first.
 
     Args:
-        rows: Pod logs as:
-            - ``PodLogs`` / ``list[PodLogs]`` (preferred: ``pod_name`` + ``logs``)
-            - flat rows ``{time, pod_name, message}`` (grouped by pod)
-            - flat rows ``{time, message}`` when ``pod_name=`` is set
-            - JSON array / JSONEachRow (NDJSON) string
+        pods: List of ``PodLogs`` (``pod_name`` + ``logs[{time, message}]``).
         algorithm: ``\"logzip\"`` or ``\"drain3\"``.
-        pod_name: Default pod name when flat rows omit ``pod_name``.
         token_counter: Optional LLM token counter (defaults to tiktoken when
             installed; token fields stay None otherwise).
         **kwargs: Backend-specific options forwarded to the compressor.
@@ -97,13 +91,13 @@ def compress_logs(
     Returns:
         CompressionResult with sizes, timing, compressed text, and metadata.
     """
-    pods = normalize_pod_logs(rows, pod_name=pod_name)
-    count = total_log_count(pods)
+    pod_list = ensure_pod_logs(pods)
+    count = total_log_count(pod_list)
     if count == 0:
         msg = "No pod log records to compress"
         raise ValueError(msg)
     return compress_text(
-        pod_logs_to_text(pods),
+        pod_logs_to_text(pod_list),
         count,
         algorithm,
         token_counter=token_counter,

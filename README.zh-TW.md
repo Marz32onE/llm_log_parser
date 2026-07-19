@@ -20,7 +20,7 @@ WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
 ORDER BY time
 ```
 
-含 `time, pod_name, message` 的扁平 ClickHouse rows 也接受,會自動依 pod 分組。
+含 `time, pod_name, message` 的扁平 ClickHouse rows(或 JSON/NDJSON 字串)先用 `parse_pod_logs` 轉換一次;之後所有壓縮/digest 入口一律只收 `list[PodLogs]`。CLI 則直接接受原始 JSON 形式。
 
 | 演算法 | 套件 | 風格 |
 | --- | --- | --- |
@@ -47,14 +47,16 @@ make install
 .venv/bin/python examples/compress_pod_logs.py
 ```
 
-`PodLogs`、time/message rows 與演算法比較的用法見 [`examples/compress_pod_logs.py`](examples/compress_pod_logs.py)。
+`PodLogs`、time/message rows、演算法比較與多 pod LLM 判讀的用法見 [`examples/compress_pod_logs.py`](examples/compress_pod_logs.py)。
 
 ## Library API
 
 ```python
-from llmlogs import compress_logs, compare_algorithms, PodLogs, LogEntry
+from llmlogs import (
+    compress_logs, compare_algorithms, digest_logs, parse_pod_logs, PodLogs, LogEntry,
+)
 
-# 建議:PodLogs(pod_name + logs)
+# 所有入口只收一種輸入形狀:list[PodLogs]
 pod = PodLogs(
     pod_name="checkout-7d9f8b6c4-xk2m1",
     logs=[
@@ -62,19 +64,25 @@ pod = PodLogs(
         LogEntry(time="2026-07-18T09:15:02Z", message="request ok"),
     ],
 )
-result = compress_logs(pod, "logzip")
+result = compress_logs([pod], "logzip")
 
-# 或:time/message rows + pod_name 參數
+# 手上是 ClickHouse rows 或 JSON?先用 parse_pod_logs 轉換一次:
 rows = list(client.query(
     "SELECT time, message FROM otel.logs WHERE pod_name = {p:String}",
     parameters={"p": "checkout-7d9f8b6c4-xk2m1"},
 ).named_results())
-compress_logs(rows, "drain3", pod_name="checkout-7d9f8b6c4-xk2m1")
+pods = parse_pod_logs(rows, pod_name="checkout-7d9f8b6c4-xk2m1")
+compress_logs(pods, "drain3")
 
-# 或:扁平 rows 也可以(依 pod_name 分組)
+# 扁平 rows(time, pod_name, message)在 parse 階段依 pod 分組
 flat = list(client.query("SELECT time, pod_name, message FROM ...").named_results())
-comparison = compare_algorithms(flat)
+comparison = compare_algorithms(parse_pod_logs(flat))
 print(comparison.summary())
+
+# 多個 pod 一起送:digest_logs 直接回傳一個 LLM 可用的字串,
+# 適合跨 pod(上下游)因果判讀
+llm_input = digest_logs([api_pod, db_pod])  # 有損 digest — 直接貼進 prompt
+compress_logs([api_pod, db_pod], "logzip")  # 需可重建 payload 時的無損選項
 ```
 
 ### LLM 導向的文字格式
@@ -91,22 +99,29 @@ UTC 日期時,日期會抽進 header(完整 ISO 時間戳每行約 16 個 LLM to
 重建無損:原始時間 = `{date}T{clock}Z`。非 ISO、非 UTC 或跨日期的時間戳
 會回退為完整的 `{time} {message}` 行。
 
-### `compress_logs(rows, algorithm, *, pod_name=None, token_counter=None, **kwargs) -> CompressionResult`
+### `parse_pod_logs(payload, *, pod_name=None) -> list[PodLogs]`
+
+唯一的轉換邊界。把 JSON array / NDJSON(JSONEachRow)字串、PodLogs 形狀的
+dicts,或扁平 `{time, pod_name, message}` rows(依 pod 分組)轉成其他入口
+都收的 `list[PodLogs]`。rows 只有 `time` + `message` 時用 `pod_name=`
+提供預設值。
+
+### `compress_logs(pods, algorithm, *, token_counter=None, **kwargs) -> CompressionResult`
 
 可重建壓縮的主要進入點。
 
-- `rows`:`PodLogs` / `list[PodLogs]` / 扁平 dicts / JSON / NDJSON
+- `pods`:`list[PodLogs]` — 唯一接受的形狀;其他形式先用
+  `parse_pod_logs` 轉換
 - `algorithm`:`"logzip"` 或 `"drain3"`
-- `pod_name`:rows 只有 `time` + `message` 時必填
 - `token_counter`:可選的 `Callable[[str], int]`;預設在安裝 tiktoken
   (`o200k_base`)時啟用,否則 token 欄位為 `None`
 
-### `compare_algorithms(rows, *, pod_name=None, token_counter=None) -> ComparisonResult`
+### `compare_algorithms(pods, *, token_counter=None) -> ComparisonResult`
 
-跑兩種演算法;用 `.best()` 與 `.summary()` 比較。有 token 數時,
-`.best()` 以 **LLM token** 判定,不看 bytes。
+對同一份 `list[PodLogs]` 跑兩種演算法;用 `.best()` 與 `.summary()` 比較。
+有 token 數時,`.best()` 以 **LLM token** 判定,不看 bytes。
 
-### `digest_logs(rows, *, pod_name=None, options=None) -> str`
+### `digest_logs(pods, *, options=None) -> str`
 
 有損、LLM 可讀的摘要:重複出現的 drain3 模板各聚合成一行(出現次數、
 時間區間、值分佈/數值範圍),罕見行以原文保留為 events。這是回答

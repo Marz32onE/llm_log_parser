@@ -20,7 +20,7 @@ WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
 ORDER BY time
 ```
 
-Flat ClickHouse rows with `time, pod_name, message` are still accepted and grouped by pod.
+Flat ClickHouse rows with `time, pod_name, message` (or JSON/NDJSON strings) are converted once with `parse_pod_logs`; every compression/digest entry point then takes the same `list[PodLogs]`. The CLI accepts the raw JSON forms directly.
 
 | Algorithm | Package | Style |
 | --- | --- | --- |
@@ -47,14 +47,16 @@ make install
 .venv/bin/python examples/compress_pod_logs.py
 ```
 
-See [`examples/compress_pod_logs.py`](examples/compress_pod_logs.py) for `PodLogs`, time/message rows, and algorithm comparison.
+See [`examples/compress_pod_logs.py`](examples/compress_pod_logs.py) for `PodLogs`, time/message rows, algorithm comparison, and multi-pod LLM triage.
 
 ## Library API
 
 ```python
-from llmlogs import compress_logs, compare_algorithms, PodLogs, LogEntry
+from llmlogs import (
+    compress_logs, compare_algorithms, digest_logs, parse_pod_logs, PodLogs, LogEntry,
+)
 
-# Preferred: PodLogs (pod_name + logs)
+# Every entry point takes one input shape: list[PodLogs]
 pod = PodLogs(
     pod_name="checkout-7d9f8b6c4-xk2m1",
     logs=[
@@ -62,19 +64,25 @@ pod = PodLogs(
         LogEntry(time="2026-07-18T09:15:02Z", message="request ok"),
     ],
 )
-result = compress_logs(pod, "logzip")
+result = compress_logs([pod], "logzip")
 
-# Or: time/message rows + pod_name kwarg
+# Got ClickHouse rows or JSON instead? Convert once with parse_pod_logs:
 rows = list(client.query(
     "SELECT time, message FROM otel.logs WHERE pod_name = {p:String}",
     parameters={"p": "checkout-7d9f8b6c4-xk2m1"},
 ).named_results())
-compress_logs(rows, "drain3", pod_name="checkout-7d9f8b6c4-xk2m1")
+pods = parse_pod_logs(rows, pod_name="checkout-7d9f8b6c4-xk2m1")
+compress_logs(pods, "drain3")
 
-# Or: flat rows still work (grouped by pod_name)
+# Flat rows (time, pod_name, message) are grouped by pod during parsing
 flat = list(client.query("SELECT time, pod_name, message FROM ...").named_results())
-comparison = compare_algorithms(flat)
+comparison = compare_algorithms(parse_pod_logs(flat))
 print(comparison.summary())
+
+# Multiple pods at once: digest_logs returns one LLM-ready string
+# for cross-pod (upstream/downstream) triage
+llm_input = digest_logs([api_pod, db_pod])  # lossy digest — paste straight into the prompt
+compress_logs([api_pod, db_pod], "logzip")  # lossless when it must be reconstructable
 ```
 
 ### LLM-oriented text format
@@ -92,22 +100,30 @@ when every line shares one UTC date, the date is factored into the header
 Reconstruction is lossless: original time = `{date}T{clock}Z`. Non-ISO,
 non-UTC, or multi-date timestamps fall back to full `{time} {message}` lines.
 
-### `compress_logs(rows, algorithm, *, pod_name=None, token_counter=None, **kwargs) -> CompressionResult`
+### `parse_pod_logs(payload, *, pod_name=None) -> list[PodLogs]`
+
+The one conversion boundary. Turns a JSON array / NDJSON (JSONEachRow)
+string, PodLogs-shaped dicts, or flat `{time, pod_name, message}` rows
+(grouped by pod) into the `list[PodLogs]` every other entry point takes.
+`pod_name=` supplies the default when rows only carry `time` + `message`.
+
+### `compress_logs(pods, algorithm, *, token_counter=None, **kwargs) -> CompressionResult`
 
 Primary entry point for reconstructable compression.
 
-- `rows`: `PodLogs` / `list[PodLogs]` / flat dicts / JSON / NDJSON
+- `pods`: `list[PodLogs]` — the only accepted shape; convert anything else
+  with `parse_pod_logs` first
 - `algorithm`: `"logzip"` or `"drain3"`
-- `pod_name`: required when rows only have `time` + `message`
 - `token_counter`: optional `Callable[[str], int]`; defaults to tiktoken
   (`o200k_base`) when installed, else token fields stay `None`
 
-### `compare_algorithms(rows, *, pod_name=None, token_counter=None) -> ComparisonResult`
+### `compare_algorithms(pods, *, token_counter=None) -> ComparisonResult`
 
-Runs both algorithms; use `.best()` and `.summary()` to compare. When token
-counts are available, `.best()` picks by **LLM tokens**, not bytes.
+Runs both algorithms on the same `list[PodLogs]`; use `.best()` and
+`.summary()` to compare. When token counts are available, `.best()` picks by
+**LLM tokens**, not bytes.
 
-### `digest_logs(rows, *, pod_name=None, options=None) -> str`
+### `digest_logs(pods, *, options=None) -> str`
 
 Lossy, LLM-readable digest: recurring drain3 templates are aggregated into
 one line each (occurrence count, time span, value distributions / numeric

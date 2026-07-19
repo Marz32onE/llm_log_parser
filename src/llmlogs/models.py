@@ -178,27 +178,28 @@ def total_log_count(pods: Sequence[PodLogs]) -> int:
     return sum(pod.line_count for pod in pods)
 
 
-def normalize_pod_logs(
-    rows: Sequence[PodLogs | Mapping[str, Any]] | Mapping[str, Any] | str | PodLogs,
-    *,
-    pod_name: str | None = None,
-) -> list[PodLogs]:
-    """Coerce input into a list of ``PodLogs``.
+_ENSURE_HINT = "use parse_pod_logs() to convert JSON strings or flat ClickHouse rows first"
 
-    Accepts:
-    - ``PodLogs`` or list of ``PodLogs``
-    - dict ``{pod_name, logs: [{time, message}, ...]}`` (or list of those)
-    - flat ClickHouse rows ``{time, pod_name, message}`` (grouped by pod)
-    - flat rows ``{time, message}`` when ``pod_name=`` is provided
-    - JSON array / single object / NDJSON string of any of the above
+
+def ensure_pod_logs(pods: object) -> list[PodLogs]:
+    """Validate that ``pods`` is a list of ``PodLogs`` and return it as a list.
+
+    The compression/digest entry points take exactly one input shape —
+    ``list[PodLogs]`` — so the error messages here point at the fix:
+    wrap a single pod in a list, or convert other shapes with
+    ``parse_pod_logs`` first.
     """
-    if isinstance(rows, str):
-        return parse_pod_logs(rows, pod_name=pod_name)
-    if isinstance(rows, PodLogs):
-        return [rows]
-    if isinstance(rows, Mapping):
-        return [_mapping_to_pod_logs(rows, default_pod_name=pod_name)]
-    return _sequence_to_pod_logs(rows, default_pod_name=pod_name)
+    if isinstance(pods, PodLogs):
+        msg = "Expected list[PodLogs]; wrap the single PodLogs in a list: [pod]"
+        raise ValueError(msg)
+    if isinstance(pods, str) or not isinstance(pods, Sequence):
+        msg = f"Expected list[PodLogs], got {type(pods).__name__}; {_ENSURE_HINT}"
+        raise ValueError(msg)
+    for index, item in enumerate(pods):
+        if not isinstance(item, PodLogs):
+            msg = f"Element {index} must be PodLogs (got {type(item).__name__}); {_ENSURE_HINT}"
+            raise ValueError(msg)
+    return list(pods)
 
 
 def parse_pod_logs(

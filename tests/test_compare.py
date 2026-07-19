@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from llmlogs.compare import compare_algorithms
 from llmlogs.models import Algorithm, PodLogs
 
 
-def test_compare_algorithms_runs_both(sample_pod_rows: list[dict[str, str]]) -> None:
-    comparison = compare_algorithms(sample_pod_rows)
+def test_compare_algorithms_runs_both(
+    sample_pod_logs: list[PodLogs],
+    sample_pod_rows: list[dict[str, str]],
+) -> None:
+    comparison = compare_algorithms(sample_pod_logs)
     assert comparison.record_count == len(sample_pod_rows)
     assert comparison.original_bytes > 0
     assert set(comparison.results) == {Algorithm.LOGZIP, Algorithm.DRAIN3}
@@ -27,14 +32,13 @@ def test_compare_algorithms_case_insensitive(sample_pod_logs: list[PodLogs]) -> 
     assert set(comparison.results) == {Algorithm.DRAIN3}
 
 
-def test_compare_algorithms_json_string(sample_pod_logs_json: str) -> None:
-    comparison = compare_algorithms(sample_pod_logs_json)
-    assert Algorithm.DRAIN3 in comparison.results
-    assert Algorithm.LOGZIP in comparison.results
+def test_compare_algorithms_rejects_json_string(sample_pod_logs_json: str) -> None:
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        compare_algorithms(sample_pod_logs_json)  # type: ignore[arg-type]
 
 
-def test_compare_algorithms_token_counter(sample_pod_rows: list[dict[str, str]]) -> None:
-    comparison = compare_algorithms(sample_pod_rows, token_counter=lambda text: len(text))
+def test_compare_algorithms_token_counter(sample_pod_logs: list[PodLogs]) -> None:
+    comparison = compare_algorithms(sample_pod_logs, token_counter=lambda text: len(text))
     for result in comparison.results.values():
         assert result.original_tokens == comparison.original_tokens
         assert result.compressed_tokens == len(result.compressed_text)
@@ -44,7 +48,5 @@ def test_compare_algorithms_token_counter(sample_pod_rows: list[dict[str, str]])
 
 
 def test_compare_algorithms_empty_raises() -> None:
-    import pytest
-
     with pytest.raises(ValueError, match="No pod log records"):
         compare_algorithms([])

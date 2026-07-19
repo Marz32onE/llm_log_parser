@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from llmlogs.models import Algorithm, LogEntry, PodLogs
+from llmlogs.models import Algorithm, LogEntry, PodLogs, parse_pod_logs
 from llmlogs.pipeline import compress_logs, get_compressor
 
 
@@ -19,11 +19,12 @@ def test_get_compressor_rejects_unknown() -> None:
 
 
 @pytest.mark.parametrize("algorithm", [Algorithm.LOGZIP, Algorithm.DRAIN3, "logzip", "drain3"])
-def test_compress_logs_from_dicts(
+def test_compress_logs_pod_logs_list(
+    sample_pod_logs: list[PodLogs],
     sample_pod_rows: list[dict[str, str]],
     algorithm: Algorithm | str,
 ) -> None:
-    result = compress_logs(sample_pod_rows, algorithm)
+    result = compress_logs(sample_pod_logs, algorithm)
     assert result.compressed_bytes > 0
     assert result.compressed_text
     assert result.duration_ms >= 0
@@ -32,45 +33,36 @@ def test_compress_logs_from_dicts(
     assert result.algorithm in {Algorithm.LOGZIP, Algorithm.DRAIN3}
 
 
-def test_compress_logs_from_pod_logs(sample_pod_logs: list[PodLogs]) -> None:
-    result = compress_logs(sample_pod_logs, "logzip")
-    assert result.metadata["record_count"] == sum(p.line_count for p in sample_pod_logs)
-
-
-def test_compress_logs_time_message_with_pod_name() -> None:
-    rows = [
-        {"time": "t1", "message": "ready"},
-        {"time": "t2", "message": "request ok"},
-    ]
-    result = compress_logs(rows, "drain3", pod_name="app-0")
-    assert result.metadata["record_count"] == 2
-    assert result.compressed_text
-
-
-def test_compress_logs_from_json_string(sample_pod_logs_json: str) -> None:
-    result = compress_logs(sample_pod_logs_json, "drain3")
+def test_compress_logs_parsed_json_string(sample_pod_logs_json: str) -> None:
+    result = compress_logs(parse_pod_logs(sample_pod_logs_json), "drain3")
     assert '"format":"drain3-llmlogs-v1"' in result.compressed_text
     assert result.metadata["cluster_count"] >= 1
 
 
-def test_compress_logs_structured_pod_logs() -> None:
-    pod = PodLogs(
-        pod_name="app-0",
-        logs=[
-            LogEntry(time="2026-07-18T09:15:01Z", message="ready"),
-            LogEntry(time="2026-07-18T09:15:02Z", message="request ok"),
-        ],
-    )
-    result = compress_logs(pod, "logzip")
+def test_compress_logs_parsed_time_message_rows() -> None:
+    rows = [
+        {"time": "t1", "message": "ready"},
+        {"time": "t2", "message": "request ok"},
+    ]
+    result = compress_logs(parse_pod_logs(rows, pod_name="app-0"), "drain3")
     assert result.metadata["record_count"] == 2
+    assert result.compressed_text
 
 
-def test_compress_logs_accepts_single_mapping() -> None:
-    result = compress_logs(
-        {"pod_name": "app-0", "logs": [{"time": "t1", "message": "ready"}]},
-        "logzip",
-    )
-    assert result.metadata["record_count"] == 1
+def test_compress_logs_rejects_single_pod_logs() -> None:
+    pod = PodLogs(pod_name="app-0", logs=[LogEntry(time="t1", message="ready")])
+    with pytest.raises(ValueError, match=r"wrap the single PodLogs in a list"):
+        compress_logs(pod, "logzip")  # type: ignore[arg-type]
+
+
+def test_compress_logs_rejects_non_pod_logs_inputs() -> None:
+    flat_rows = [{"time": "t1", "pod_name": "app-0", "message": "ready"}]
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        compress_logs(flat_rows, "logzip")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        compress_logs('[{"time": "t1", "message": "m"}]', "logzip")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        compress_logs({"pod_name": "app-0", "logs": []}, "logzip")  # type: ignore[arg-type]
 
 
 def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
@@ -84,14 +76,14 @@ def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
     assert result.metadata["line_count"] == 2
 
 
-def test_compress_logs_injected_token_counter(sample_pod_rows: list[dict[str, str]]) -> None:
+def test_compress_logs_injected_token_counter(sample_pod_logs: list[PodLogs]) -> None:
     counter_calls: list[str] = []
 
     def fake_counter(text: str) -> int:
         counter_calls.append(text)
         return len(text.split())
 
-    result = compress_logs(sample_pod_rows, "drain3", token_counter=fake_counter)
+    result = compress_logs(sample_pod_logs, "drain3", token_counter=fake_counter)
     assert len(counter_calls) == 2
     assert result.original_tokens == len(counter_calls[0].split())
     assert result.compressed_tokens == len(counter_calls[1].split())
@@ -100,10 +92,10 @@ def test_compress_logs_injected_token_counter(sample_pod_rows: list[dict[str, st
 
 
 def test_compress_logs_default_token_counter_optional(
-    sample_pod_rows: list[dict[str, str]],
+    sample_pod_logs: list[PodLogs],
 ) -> None:
     # With tiktoken installed the fields are ints; without it they are None.
-    result = compress_logs(sample_pod_rows, "logzip")
+    result = compress_logs(sample_pod_logs, "logzip")
     assert result.original_tokens is None or result.original_tokens > 0
     assert (result.original_tokens is None) == (result.compressed_tokens is None)
 
@@ -115,4 +107,4 @@ def test_compress_logs_empty_raises() -> None:
 
 def test_compress_logs_empty_pod_logs_raises() -> None:
     with pytest.raises(ValueError, match="No pod log records"):
-        compress_logs(PodLogs(pod_name="p1", logs=[]), "logzip")
+        compress_logs([PodLogs(pod_name="p1", logs=[])], "logzip")

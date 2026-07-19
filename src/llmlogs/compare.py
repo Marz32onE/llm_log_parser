@@ -2,34 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from llmlogs.models import (
     Algorithm,
     ComparisonResult,
     CompressionResult,
-    normalize_pod_logs,
+    PodLogs,
+    ensure_pod_logs,
     pod_logs_to_text,
     total_log_count,
 )
-from llmlogs.pipeline import LogRows, coerce_algorithm, compress_text
+from llmlogs.pipeline import coerce_algorithm, compress_text
 from llmlogs.tokens import TokenCounter
 
 
-def compare_algorithms(  # pylint: disable=too-many-arguments
-    rows: LogRows,
+def compare_algorithms(
+    pods: Sequence[PodLogs],
     *,
     algorithms: list[Algorithm | str] | None = None,
-    pod_name: str | None = None,
     logzip_options: dict[str, object] | None = None,
     drain3_options: dict[str, object] | None = None,
     token_counter: TokenCounter | None = None,
 ) -> ComparisonResult:
-    """Compress the same ClickHouse pod logs with multiple algorithms.
+    """Compress the same pod logs with multiple algorithms.
 
     Args:
-        rows: Pod logs (``PodLogs`` or flat ``time``/``message``/``pod_name`` rows)
-            as list of dicts/models or JSON / NDJSON string from ClickHouse.
+        pods: List of ``PodLogs`` (convert JSON strings or flat ClickHouse
+            rows with ``parse_pod_logs`` first).
         algorithms: Algorithms to run (default: both logzip and drain3).
-        pod_name: Default pod name when flat rows omit ``pod_name``.
         logzip_options: Optional kwargs for LogzipCompressor.
         drain3_options: Optional kwargs for Drain3Compressor.
         token_counter: Optional LLM token counter (defaults to tiktoken when
@@ -38,13 +39,13 @@ def compare_algorithms(  # pylint: disable=too-many-arguments
     Returns:
         ComparisonResult with per-algorithm metrics for easy comparison.
     """
-    pods = normalize_pod_logs(rows, pod_name=pod_name)
-    count = total_log_count(pods)
+    pod_list = ensure_pod_logs(pods)
+    count = total_log_count(pod_list)
     if count == 0:
         msg = "No pod log records to compare"
         raise ValueError(msg)
 
-    text = pod_logs_to_text(pods)
+    text = pod_logs_to_text(pod_list)
     option_map: dict[Algorithm, dict[str, object]] = {
         Algorithm.LOGZIP: dict(logzip_options or {}),
         Algorithm.DRAIN3: dict(drain3_options or {}),

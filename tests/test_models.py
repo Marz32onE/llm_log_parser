@@ -14,7 +14,7 @@ from llmlogs.models import (
     CompressionResult,
     LogEntry,
     PodLogs,
-    normalize_pod_logs,
+    ensure_pod_logs,
     parse_pod_logs,
     pod_logs_to_text,
     total_log_count,
@@ -166,40 +166,59 @@ def test_log_entry_missing_fields_raises() -> None:
         LogEntry.model_validate({"time": "t1"})
 
 
-def test_normalize_flat_rows_groups_by_pod(sample_pod_rows: list[dict[str, str]]) -> None:
-    pods = normalize_pod_logs(sample_pod_rows)
+def test_parse_flat_rows_groups_by_pod(sample_pod_rows: list[dict[str, str]]) -> None:
+    pods = parse_pod_logs(sample_pod_rows)
     assert len(pods) == 1
     assert pods[0].pod_name.startswith("checkout-")
     assert total_log_count(pods) == len(sample_pod_rows)
 
 
-def test_normalize_time_message_with_pod_name_kwarg() -> None:
+def test_parse_time_message_with_pod_name_kwarg() -> None:
     rows = [
         {"time": "t1", "message": "m1"},
         {"time": "t2", "message": "m2"},
     ]
-    pods = normalize_pod_logs(rows, pod_name="app-0")
+    pods = parse_pod_logs(rows, pod_name="app-0")
     assert len(pods) == 1
     assert pods[0].pod_name == "app-0"
     assert [e.message for e in pods[0].logs] == ["m1", "m2"]
 
 
 def test_explicit_falsy_pod_name_is_not_replaced_by_default() -> None:
-    pods = normalize_pod_logs(
-        {"pod_name": 0, "logs": [{"time": "t1", "message": "m1"}]},
+    pods = parse_pod_logs(
+        '{"pod_name": 0, "logs": [{"time": "t1", "message": "m1"}]}',
         pod_name="fallback",
     )
     assert pods[0].pod_name == "0"
 
 
-def test_normalize_flat_rows_missing_pod_raises() -> None:
+def test_parse_flat_rows_missing_pod_raises() -> None:
     with pytest.raises(ValueError, match="missing pod_name"):
-        normalize_pod_logs([{"time": "t1", "message": "m1"}])
+        parse_pod_logs([{"time": "t1", "message": "m1"}])
 
 
-def test_normalize_pod_logs_object() -> None:
+def test_ensure_pod_logs_accepts_list() -> None:
     pod = PodLogs(pod_name="p1", logs=[LogEntry(time="t1", message="m1")])
-    assert normalize_pod_logs(pod) == [pod]
+    assert ensure_pod_logs([pod]) == [pod]
+    assert ensure_pod_logs([]) == []
+
+
+def test_ensure_pod_logs_rejects_single_pod() -> None:
+    pod = PodLogs(pod_name="p1", logs=[LogEntry(time="t1", message="m1")])
+    with pytest.raises(ValueError, match=r"wrap the single PodLogs in a list"):
+        ensure_pod_logs(pod)
+
+
+def test_ensure_pod_logs_rejects_non_list_shapes() -> None:
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        ensure_pod_logs('[{"time": "t1", "pod_name": "p", "message": "m"}]')
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        ensure_pod_logs({"pod_name": "p", "logs": []})
+
+
+def test_ensure_pod_logs_rejects_non_pod_elements() -> None:
+    with pytest.raises(ValueError, match="Element 0 must be PodLogs"):
+        ensure_pod_logs([{"time": "t1", "pod_name": "p", "message": "m"}])
 
 
 def test_pod_logs_to_text_multi_pod() -> None:

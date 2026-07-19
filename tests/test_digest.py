@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from llmlogs.digest import DigestOptions, _summarize_slot, digest_logs, digest_pods
-from llmlogs.models import LogEntry, PodLogs
+from llmlogs.digest import DigestOptions, _summarize_slot, digest_logs
+from llmlogs.models import LogEntry, PodLogs, parse_pod_logs
 
 
-def test_digest_fixture_patterns_and_events(sample_pod_rows: list[dict[str, str]]) -> None:
-    digest = digest_logs(sample_pod_rows)
+def test_digest_fixture_patterns_and_events(sample_pod_logs: list[PodLogs]) -> None:
+    digest = digest_logs(sample_pod_logs)
     assert digest.startswith("# log digest:")
     assert "# pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18" in digest
     assert "## patterns" in digest
@@ -40,7 +40,7 @@ def test_digest_multi_pod_blocks() -> None:
             logs=[LogEntry(time="2026-07-18T09:00:01Z", message="ready")],
         ),
     ]
-    digest = digest_pods(pods)
+    digest = digest_logs(pods)
     assert "# pod: a date: 2026-07-18" in digest
     assert "# pod: b date: 2026-07-18" in digest
 
@@ -50,7 +50,7 @@ def test_digest_non_iso_times_stay_verbatim() -> None:
         pod_name="app-0",
         logs=[LogEntry(time=f"t{i}", message=f"worker heartbeat seq={i}") for i in range(6)],
     )
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert "# pod: app-0\n" in digest  # no date factored
     assert "x6 t0-t5 worker heartbeat" in digest
 
@@ -63,7 +63,7 @@ def test_digest_rare_threshold_and_max_values() -> None:
         ],
     )
     options = DigestOptions(rare_threshold=0, max_values=2)
-    digest = digest_pods([pod], options=options)
+    digest = digest_logs([pod], options=options)
     assert "## events" not in digest
     assert "+3 more" in digest
 
@@ -76,13 +76,13 @@ def test_digest_escapes_newlines_in_events() -> None:
             LogEntry(time="2026-07-18T09:00:01Z", message="ready"),
         ],
     )
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert "panic: boom\\nstack: main.go:1" in digest
 
 
-def test_digest_logs_pod_name_kwarg() -> None:
+def test_digest_logs_parsed_time_message_rows() -> None:
     rows = [{"time": "t1", "message": "ready"}]
-    digest = digest_logs(rows, pod_name="app-0")
+    digest = digest_logs(parse_pod_logs(rows, pod_name="app-0"))
     assert "# pod: app-0" in digest
     assert "t1 ready" in digest
 
@@ -90,6 +90,11 @@ def test_digest_logs_pod_name_kwarg() -> None:
 def test_digest_logs_empty_raises() -> None:
     with pytest.raises(ValueError, match="No pod log records"):
         digest_logs([])
+
+
+def test_digest_logs_rejects_flat_rows() -> None:
+    with pytest.raises(ValueError, match="parse_pod_logs"):
+        digest_logs([{"time": "t1", "pod_name": "p", "message": "m"}])  # type: ignore[list-item]
 
 
 def test_summarize_slot_status_never_range_collapses_past_max_values() -> None:
@@ -118,7 +123,7 @@ def test_digest_pattern_span_is_min_max_for_unsorted_iso_input() -> None:
             for s in (5, 3, 4, 1)
         ],
     )
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert "x4 09:15:01-09:15:05 req" in digest
 
 
@@ -164,7 +169,7 @@ def test_digest_patterns_ordered_by_earliest_occurrence() -> None:
         LogEntry(time=f"2026-07-18T09:00:0{i}Z", message=f"worker ready seq={i}") for i in range(4)
     ]
     pod = PodLogs(pod_name="p", logs=db + worker)
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert digest.index("worker ready") < digest.index("db slow")
 
 
@@ -178,7 +183,7 @@ def test_digest_patterns_non_iso_ordered_by_first_appearance() -> None:
             LogEntry(time="t3", message="beta busy seq=3"),
         ],
     )
-    digest = digest_pods([pod], options=DigestOptions(rare_threshold=0))
+    digest = digest_logs([pod], options=DigestOptions(rare_threshold=0))
     assert digest.index("alpha ready") < digest.index("beta busy")
 
 
@@ -196,7 +201,7 @@ def test_digest_shape_summary_does_not_corrupt_later_slots() -> None:
             for i in range(8)
         ],
     )
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     pattern = next(line for line in digest.splitlines() if line.startswith("x8"))
     assert "processing order id=ord-<*> (8 distinct) items=1..6" in pattern
 
@@ -212,14 +217,14 @@ def test_digest_high_cardinality_path_keeps_prefix_shape() -> None:
             for i in range(8)
         ],
     )
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert "path=/api/v1/users/<*>/profile (8 distinct)" in digest
     assert "<8 distinct values>" not in digest
 
 
 def test_digest_whitespace_only_messages_yield_header_only_block() -> None:
     pod = PodLogs(pod_name="quiet", logs=[LogEntry(time="t1", message="   ")])
-    digest = digest_pods([pod])
+    digest = digest_logs([pod])
     assert "# pod: quiet" in digest
     assert "## patterns" not in digest
     assert "## events" not in digest

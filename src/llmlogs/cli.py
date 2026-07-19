@@ -9,7 +9,7 @@ from pathlib import Path
 
 from llmlogs import __version__
 from llmlogs.compare import compare_algorithms
-from llmlogs.digest import DigestOptions, digest_pods
+from llmlogs.digest import DigestOptions, digest_logs
 from llmlogs.models import (
     SCHEMA,
     Algorithm,
@@ -208,7 +208,7 @@ def _comparison_report(comparison: ComparisonResult) -> dict[str, object]:
 
 def _run_digest(args: argparse.Namespace, pods: list[PodLogs]) -> int:
     options = DigestOptions(rare_threshold=args.rare_threshold, max_values=args.max_values)
-    digest = digest_pods(pods, options=options)
+    digest = digest_logs(pods, options=options)
     _write_output(args.output, digest)
     if args.stats:
         rendered = pod_logs_to_text(pods)
