@@ -119,7 +119,7 @@ the rendered text, while OOMs, restarts, and error spikes stay visible:
 ```text
 # pod: order-worker-5c6d7e8f9-ab3cd date: 2026-07-18
 ## patterns
-x26 09:02:04.000-09:03:21.697 db write failed <77 distinct values> err=timeout after=2000ms <retry=3 x12, retry=2 x8, retry=1 x6>
+x26 09:02:04.000-09:03:21.697 db write failed id=ord-<*> (26 distinct) err=timeout after=2000ms <retry=3 x12, retry=2 x8, retry=1 x6>
 ## events
 09:03:05.000 fatal error: runtime: out of memory
 09:03:10.000 Started container order-worker
@@ -215,11 +215,16 @@ Per pod, `digest.py` runs five steps:
      status=504 x30>`) — collapsing `status=200/404` into `200..404` would
      hide the rare error, statuses are categories, not magnitudes;
    - many distinct same-key numerics → range (`duration_ms=1..9956`);
-   - all-unique high cardinality → `<77 distinct values>`;
+   - all-unique high cardinality → the shared boundary-anchored shape when
+     one exists (`path=/api/v1/users/<*>/profile (8 distinct)`,
+     `id=ord-<*> (77 distinct)`), else `<77 distinct values>` — a bare count
+     would throw away the endpoint/id shape, which is the useful part;
    - otherwise top-N + `+K more`.
-5. **Render cheap**: date factored into the pod header, `HH:MM:SS.mmm`
-   clocks, `xN` counts with first–last time spans, and a one-line notation
-   legend at the top (~20 tokens) so the LLM never has to guess the format.
+5. **Render cheap and chronological**: date factored into the pod header,
+   `HH:MM:SS.mmm` clocks, `xN` counts with first–last time spans, patterns
+   ordered by earliest occurrence (steady state first, then what broke — the
+   same time axis as the events section), and a one-line notation legend at
+   the top (~20 tokens) so the LLM never has to guess the format.
 
 Lossy by design — reconstruction is impossible, so `digest` is an additional
 mode, not a replacement: use `compress_logs` (logzip/drain3) when the payload

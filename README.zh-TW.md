@@ -117,7 +117,7 @@ UTC 日期時,日期會抽進 header(完整 ISO 時間戳每行約 16 個 LLM to
 ```text
 # pod: order-worker-5c6d7e8f9-ab3cd date: 2026-07-18
 ## patterns
-x26 09:02:04.000-09:03:21.697 db write failed <77 distinct values> err=timeout after=2000ms <retry=3 x12, retry=2 x8, retry=1 x6>
+x26 09:02:04.000-09:03:21.697 db write failed id=ord-<*> (26 distinct) err=timeout after=2000ms <retry=3 x12, retry=2 x8, retry=1 x6>
 ## events
 09:03:05.000 fatal error: runtime: out of memory
 09:03:10.000 Started container order-worker
@@ -208,11 +208,15 @@ llmlogs digest -i rows.json --stats
      status=504 x30>`)— 把 `status=200/404` 收成 `200..404` 會藏掉
      罕見錯誤,status 是類別不是連續量;
    - 大量 distinct 的同 key 數值 → 範圍(`duration_ms=1..9956`);
-   - 全部唯一的高基數值 → `<77 distinct values>`;
+   - 全部唯一的高基數值 → 有共同結構時保留邊界對齊的形狀
+     (`path=/api/v1/users/<*>/profile (8 distinct)`、
+     `id=ord-<*> (77 distinct)`),否則 `<77 distinct values>` —
+     只給計數會丟掉 endpoint/id 的形狀,而形狀正是有用的部分;
    - 其餘 → top-N + `+K more`。
-5. **廉價渲染**:日期抽進 pod header、`HH:MM:SS.mmm` 短時鐘、`xN` 次數
-   加 first–last 時間區間,並在最上方放一行符號說明(約 20 token),
-   讓 LLM 不必猜格式。
+5. **廉價且按時序渲染**:日期抽進 pod header、`HH:MM:SS.mmm` 短時鐘、
+   `xN` 次數加 first–last 時間區間;patterns 依最早出現時間排序
+   (先穩定狀態、再故障 — 與 events 區塊同一條時間軸),並在最上方放
+   一行符號說明(約 20 token),讓 LLM 不必猜格式。
 
 刻意設計為有損 — 無法重建原始 log,所以 `digest` 是新增模式而非取代:
 payload 必須可重建時,請用 `compress_logs`(logzip/drain3)。

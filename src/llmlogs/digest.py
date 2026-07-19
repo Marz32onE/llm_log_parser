@@ -103,7 +103,9 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
     slot_values: dict[int, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
     first_time: dict[int, str] = {}
     last_time: dict[int, str] = {}
-    for entry, cluster_id in zip(entries, cluster_ids, strict=True):
+    first_index: dict[int, int] = {}
+    for index, (entry, cluster_id) in enumerate(zip(entries, cluster_ids, strict=True)):
+        first_index.setdefault(cluster_id, index)
         clock = _clock(entry.time, date)
         if date is None:
             first_time.setdefault(cluster_id, clock)
@@ -119,17 +121,24 @@ def _digest_pod(pod: PodLogs, opts: DigestOptions) -> str:
         for slot, param in enumerate(params or []):
             slot_values[cluster_id][slot].append(str(param.value))
 
+    # Patterns read as a narrative: earliest-first (steady state, then what
+    # broke), matching the chronological events section — not count-first.
+    if date is None:
+        ordered_ids = sorted(counts, key=lambda cid: first_index[cid])
+    else:
+        ordered_ids = sorted(counts, key=lambda cid: (first_time[cid], first_index[cid]))
+
     patterns: list[str] = []
     events: list[str] = []
-    for cluster_id, count in counts.most_common():
+    for cluster_id in ordered_ids:
+        count = counts[cluster_id]
         if count <= opts.rare_threshold:
             continue
-        rendered = legend[cluster_id]
-        for slot in sorted(slot_values[cluster_id]):
-            summary = _summarize_slot(
-                slot_values[cluster_id][slot], opts.max_values, opts.always_list_keys
-            )
-            rendered = rendered.replace("<*>", summary, 1)
+        summaries = {
+            slot: _summarize_slot(values, opts.max_values, opts.always_list_keys)
+            for slot, values in slot_values[cluster_id].items()
+        }
+        rendered = _render_template(legend[cluster_id], summaries)
         span = f"{first_time[cluster_id]}-{last_time[cluster_id]}"
         patterns.append(f"x{count} {span} {rendered}")
 
@@ -173,6 +182,22 @@ def _clock(time: str, date: str | None) -> str:
     return split.clock
 
 
+def _render_template(template: str, summaries: dict[int, str]) -> str:
+    """Fill each ``<*>`` wildcard with its slot summary by position.
+
+    Sequential ``str.replace`` is wrong here: a summary may itself contain
+    ``<*>`` (shape summaries like ``id=ord-<*> (77 distinct)``), which the
+    next replacement would then corrupt; and a missing slot would shift every
+    later summary into the wrong wildcard.
+    """
+    segments = template.split("<*>")
+    parts = [segments[0]]
+    for slot, segment in enumerate(segments[1:]):
+        parts.append(summaries.get(slot, "<*>"))
+        parts.append(segment)
+    return "".join(parts)
+
+
 def _summarize_slot(
     values: list[str],
     max_values: int,
@@ -211,10 +236,51 @@ def _summarize_slot(
         if all(_NUM_RE.fullmatch(value) for value in values):
             return f"{min(values, key=float)}..{max(values, key=float)}"
         if counter.most_common(1)[0][1] == 1:
-            return f"<{len(counter)} distinct values>"
+            return _distinct_shape(values)
 
     parts = [f"{value} x{count}" for value, count in counter.most_common(max_values)]
     extra = len(counter) - max_values
     if extra > 0:
         parts.append(f"+{extra} more")
     return f"<{', '.join(parts)}>"
+
+
+def _distinct_shape(values: list[str]) -> str:
+    """Render an all-unique high-cardinality slot.
+
+    A bare distinct count throws away the value shape — for REST paths or
+    prefixed ids that shape is the useful part (``path=/api/v1/users/<*>``
+    beats ``<8 distinct values>``). Emit the shared boundary-anchored prefix
+    and suffix around a wildcard when one exists; otherwise fall back to the
+    count marker.
+    """
+    prefix = _common_prefix(values)
+    suffix = _common_suffix([value[len(prefix) :] for value in values])
+    if prefix or suffix:
+        return f"{prefix}<*>{suffix} ({len(values)} distinct)"
+    return f"<{len(values)} distinct values>"
+
+
+def _common_prefix(values: list[str]) -> str:
+    """Longest common prefix trimmed back to a separator boundary.
+
+    Trailing alphanumerics are dropped so ``/users/1000``/``/users/1007``
+    yields ``/users/`` rather than the misleading ``/users/100``.
+    """
+    low, high = min(values), max(values)
+    length = 0
+    while length < len(low) and length < len(high) and low[length] == high[length]:
+        length += 1
+    prefix = low[:length]
+    while prefix and prefix[-1].isalnum():
+        prefix = prefix[:-1]
+    return prefix
+
+
+def _common_suffix(remainders: list[str]) -> str:
+    """Longest common suffix of the post-prefix remainders, boundary-trimmed."""
+    reversed_values = [value[::-1] for value in remainders]
+    suffix = _common_prefix(reversed_values)[::-1] if reversed_values else ""
+    while suffix and suffix[0].isalnum():
+        suffix = suffix[1:]
+    return suffix

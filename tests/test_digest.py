@@ -142,11 +142,79 @@ def test_summarize_slot_rules() -> None:
     )
     # Pure numeric values collapse to a range too.
     assert _summarize_slot(["5", "1", "30", "8", "120"], 4) == "1..120"
-    # All-unique non-numeric values become a distinct-count marker.
-    assert _summarize_slot([f"id=ord-{i}a" for i in range(9)], 4) == "<9 distinct values>"
+    # All-unique prefixed ids keep their shape plus the cardinality.
+    assert _summarize_slot([f"id=ord-{i}a" for i in range(9)], 4) == "id=ord-<*> (9 distinct)"
+    # All-unique values with no shared structure fall back to a count marker.
+    assert _summarize_slot(["alpha", "beta", "gamma", "delta", "echo"], 4) == (
+        "<5 distinct values>"
+    )
     # Mixed cardinality lists the top values and counts the rest.
     values = ["a", "a", "b", "b", "c", "d", "e", "f"]
     assert _summarize_slot(values, 2) == "<a x2, b x2, +4 more>"
+
+
+def test_digest_patterns_ordered_by_earliest_occurrence() -> None:
+    # db lines come first in the input but start later; worker lines start at
+    # 09:00. Narrative order must follow the clock, not input or count order.
+    db = [
+        LogEntry(time=f"2026-07-18T09:10:0{i}Z", message=f"db slow latency_ms={i * 7 + 1}")
+        for i in range(5)
+    ]
+    worker = [
+        LogEntry(time=f"2026-07-18T09:00:0{i}Z", message=f"worker ready seq={i}") for i in range(4)
+    ]
+    pod = PodLogs(pod_name="p", logs=db + worker)
+    digest = digest_pods([pod])
+    assert digest.index("worker ready") < digest.index("db slow")
+
+
+def test_digest_patterns_non_iso_ordered_by_first_appearance() -> None:
+    pod = PodLogs(
+        pod_name="p",
+        logs=[
+            LogEntry(time="t0", message="alpha ready seq=0"),
+            LogEntry(time="t1", message="beta busy seq=1"),
+            LogEntry(time="t2", message="beta busy seq=2"),
+            LogEntry(time="t3", message="beta busy seq=3"),
+        ],
+    )
+    digest = digest_pods([pod], options=DigestOptions(rare_threshold=0))
+    assert digest.index("alpha ready") < digest.index("beta busy")
+
+
+def test_digest_shape_summary_does_not_corrupt_later_slots() -> None:
+    # Regression: a shape summary contains a literal <*>; sequential
+    # str.replace pushed the next slot's summary inside it, rendering
+    # "id=ord-items=1..6 (8 distinct) <*>".
+    pod = PodLogs(
+        pod_name="worker",
+        logs=[
+            LogEntry(
+                time=f"2026-07-18T09:00:{i:02d}Z",
+                message=f"processing order id=ord-{10000 + i} items={i % 6 + 1}",
+            )
+            for i in range(8)
+        ],
+    )
+    digest = digest_pods([pod])
+    pattern = next(line for line in digest.splitlines() if line.startswith("x8"))
+    assert "processing order id=ord-<*> (8 distinct) items=1..6" in pattern
+
+
+def test_digest_high_cardinality_path_keeps_prefix_shape() -> None:
+    pod = PodLogs(
+        pod_name="api",
+        logs=[
+            LogEntry(
+                time=f"2026-07-18T09:00:{i:02d}Z",
+                message=f"request method=GET path=/api/v1/users/{1000 + i}/profile status=200",
+            )
+            for i in range(8)
+        ],
+    )
+    digest = digest_pods([pod])
+    assert "path=/api/v1/users/<*>/profile (8 distinct)" in digest
+    assert "<8 distinct values>" not in digest
 
 
 def test_digest_whitespace_only_messages_yield_header_only_block() -> None:
