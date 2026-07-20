@@ -1,8 +1,13 @@
 .PHONY: install format lint typecheck test check
 
+# Prefer uv on PATH; fall back to the default install location.
+UV := $(shell command -v uv 2>/dev/null || echo "$(HOME)/.local/bin/uv")
+
 install:
-	uv venv --python 3.10 .venv
-	uv pip install -e ".[dev]"
+	@command -v uv >/dev/null 2>&1 || test -x "$(HOME)/.local/bin/uv" || \
+		(curl -LsSf https://astral.sh/uv/install.sh | sh)
+	$(UV) venv --python 3.10 .venv
+	$(UV) pip install -e ".[dev]"
 
 format:
 	.venv/bin/isort src tests
