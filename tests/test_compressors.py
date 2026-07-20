@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.logzip_compressor import LogzipCompressor
@@ -67,6 +68,57 @@ def test_drain3_params_align_with_final_template() -> None:
         assert len(entry["p"]) == wildcards
     assert payload["body"][0]["p"] == ["alice"]
     assert payload["body"][1]["p"] == ["bob"]
+
+
+def test_drain3_masking_generalizes_template() -> None:
+    # Without masking each distinct id keeps the cluster split on that token;
+    # a NUM mask collapses them into one template with a named placeholder.
+    text = "req id=1 ok\nreq id=22 ok\nreq id=333 ok"
+    result = Drain3Compressor(masking_instructions=[(r"(?<==)\d+\b", "NUM")]).compress(text)
+    payload = json.loads(result.compressed_text)
+    assert len(payload["legend"]) == 1
+    assert "id=<NUM>" in next(iter(payload["legend"].values()))
+    assert result.metadata["raw_fallbacks"] == 0
+    assert [entry["p"] for entry in payload["body"]] == [["1"], ["22"], ["333"]]
+
+
+def test_drain3_masked_payload_round_trips() -> None:
+    # Named placeholders (<NUM>, <IP>) must be substitutable the same way <*>
+    # is, or the payload stops being reconstructable.
+    text = "\n".join(
+        [
+            "req id=1 from=10.0.0.1 ok",
+            "req id=22 from=10.0.0.2 ok",
+            "shutdown signal=TERM",
+        ]
+    )
+    result = Drain3Compressor(
+        masking_instructions=[
+            (r"\b\d{1,3}(\.\d{1,3}){3}\b", "IP"),
+            (r"(?<==)\d+\b", "NUM"),
+        ]
+    ).compress(text)
+    payload = json.loads(result.compressed_text)
+
+    placeholder = re.compile(r"<[^<>\s]*>")
+    rebuilt = []
+    for entry in payload["body"]:
+        if "raw" in entry:
+            rebuilt.append(entry["raw"])
+            continue
+        values = iter(entry["p"])
+        template = payload["legend"][str(entry["t"])]
+        rebuilt.append(placeholder.sub(lambda _: next(values), template))
+
+    assert "\n".join(rebuilt) == text
+    assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_drain3_default_has_no_masking() -> None:
+    text = "req id=1 ok\nreq id=22 ok"
+    result = Drain3Compressor().compress(text)
+    assert "<NUM>" not in result.compressed_text
+    assert result.metadata["masking_instructions"] == 0
 
 
 def test_drain3_default_keeps_delimiters() -> None:
