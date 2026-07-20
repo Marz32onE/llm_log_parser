@@ -164,6 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max distinct values listed per template slot (default: 4)",
     )
     digest.add_argument(
+        "--sim-th",
+        type=float,
+        default=0.4,
+        help=(
+            "drain3 similarity threshold for template mining; lower it "
+            "(e.g. 0.25) when short numeric-heavy lines fragment (default: 0.4)"
+        ),
+    )
+    digest.add_argument(
         "--stats",
         action="store_true",
         help="Print digest chars vs rendered text to stderr",
@@ -198,7 +207,11 @@ def _comparison_report(comparison: ComparisonResult) -> dict[str, object]:
 
 
 def _run_digest(args: argparse.Namespace, pods: list[PodLogs]) -> int:
-    options = DigestOptions(rare_threshold=args.rare_threshold, max_values=args.max_values)
+    options = DigestOptions(
+        rare_threshold=args.rare_threshold,
+        max_values=args.max_values,
+        sim_th=args.sim_th,
+    )
     digest = digest_logs(pods, options=options)
     _write_output(args.output, digest)
     if args.stats:

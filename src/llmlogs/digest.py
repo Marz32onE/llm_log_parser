@@ -48,7 +48,8 @@ class DigestOptions:
     ``always_list_keys`` names ``key=value`` keys whose values are categories,
     not magnitudes — they are always listed with counts and never collapsed
     into a numeric range, so a rare ``status=404`` stays visible no matter how
-    many distinct values the slot holds.
+    many distinct values the slot holds. Keys are matched case-insensitively
+    (normalized to lowercase here).
     """
 
     rare_threshold: int = 3
@@ -63,6 +64,9 @@ class DigestOptions:
         if self.max_values < 1:
             msg = f"max_values must be >= 1 (got {self.max_values})"
             raise ValueError(msg)
+        object.__setattr__(
+            self, "always_list_keys", frozenset(key.lower() for key in self.always_list_keys)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,7 +205,9 @@ def _pattern_lines(
             for slot, values in slot_values[cluster_id].items()
         }
         rendered = _render_template(mined.legend[cluster_id], summaries)
-        span = f"{timeline.first_time[cluster_id]}-{timeline.last_time[cluster_id]}"
+        first = timeline.first_time[cluster_id]
+        last = timeline.last_time[cluster_id]
+        span = first if first == last else f"{first}-{last}"
         patterns.append(f"x{count} {span} {rendered}")
     return patterns
 

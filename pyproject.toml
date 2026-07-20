@@ -97,7 +97,7 @@ mypy_path = "src"
 packages = ["llmlogs"]
 
 [[tool.mypy.overrides]]
-module = ["logzip", "logzip.*"]
+module = ["logzip", "logzip.*", "drain3", "drain3.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

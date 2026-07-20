@@ -26,6 +26,7 @@ Flat ClickHouse rows with `time, pod_name, message` (or JSON/NDJSON strings) are
 | --- | --- | --- |
 | **logzip** | [`logzip`](https://pypi.org/project/logzip/) | LLM-readable structural compression (Rust/PyO3) |
 | **drain3** | [`drain3`](https://pypi.org/project/drain3/) | Template mining → legend + parameter body |
+| **digest** | built-in (`digest_logs`) | **Lossy** pattern digest for LLM triage — biggest token saving, not reconstructable |
 
 ## Requirements
 
@@ -79,8 +80,9 @@ flat = list(client.query("SELECT time, pod_name, message FROM ...").named_result
 comparison = compare_algorithms(parse_pod_logs(flat))
 print(comparison.summary())
 
-# Multiple pods at once: digest_logs returns one LLM-ready string
-# for cross-pod (upstream/downstream) triage
+# Multiple pods at once: digest_logs returns one LLM-ready string with one
+# block per pod, in input order (not a time-merged timeline) — handy for
+# upstream/downstream triage in a single prompt
 llm_input = digest_logs([api_pod, db_pod])  # lossy digest — paste straight into the prompt
 compress_logs([api_pod, db_pod], "logzip")  # lossless when it must be reconstructable
 ```
@@ -99,6 +101,63 @@ when every line shares one UTC date, the date is factored into the header
 
 Reconstruction is lossless: original time = `{date}T{clock}Z`. Non-ISO,
 non-UTC, or multi-date timestamps fall back to full `{time} {message}` lines.
+
+### Input → output, per algorithm
+
+All outputs below are real, produced from this one shared 6-line input
+(rendered text as above):
+
+```text
+# pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18
+09:15:01 request method=GET path=/api/v1/health status=200 duration_ms=3
+09:15:02 request method=GET path=/api/v1/health status=200 duration_ms=2
+09:15:03 request method=GET path=/api/v1/orders status=200 duration_ms=41
+09:15:04 request method=GET path=/api/v1/health status=200 duration_ms=4
+09:15:05 request method=POST path=/api/v1/orders status=500 duration_ms=87
+09:15:06 fatal error: runtime: out of memory
+```
+
+**`logzip`** — `compress_logs(pods, "logzip")`: recurring token n-grams move
+into a legend; the body stays line-per-line readable and reconstructable:
+
+```text
+--- LEGEND ---
+#0# = method=GET path=/api/v1/health
+#1# = path=/api/v1/health status=200
+#2# = request method=GET
+#3# = status=200
+#4# = path=/api/v1/orders
+--- BODY ---
+# pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18
+09:15:01 #2# #1# duration_ms=3
+09:15:02 #2# #1# duration_ms=2
+09:15:03 #2# #4# #3# duration_ms=41
+09:15:04 #2# #1# duration_ms=4
+09:15:05 request method=POST #4# status=500 duration_ms=87
+09:15:06 fatal error: runtime: out of memory
+```
+
+**`drain3`** — `compress_logs(pods, "drain3")`: mined templates form a JSON
+legend; each line becomes a template id + parameter list (reconstructable):
+
+```json
+{"format":"drain3-llmlogs-v1","legend":{"1":"# pod: checkout-7d9f8b6c4-xk2m1 date: <NUM>-<NUM>-<NUM>","2":"<TS> request <*> <*> status=<NUM> duration_ms=<NUM>","3":"<TS> fatal error: runtime: out of memory"},"body":[{"t":1,"p":["2026","07","18"]},{"t":2,"p":["09:15:01","method=GET","path=/api/v1/health","200","3"]},{"t":2,"p":["09:15:02","method=GET","path=/api/v1/health","200","2"]},{"t":2,"p":["09:15:03","method=GET","path=/api/v1/orders","200","41"]},{"t":2,"p":["09:15:04","method=GET","path=/api/v1/health","200","4"]},{"t":2,"p":["09:15:05","method=POST","path=/api/v1/orders","500","87"]},{"t":3,"p":["09:15:06"]}]}
+```
+
+**`digest`** — `digest_logs(pods)`: **lossy** — frequent clusters collapse
+into one aggregated pattern line each; rare lines (here the 500 and the OOM)
+stay verbatim:
+
+```text
+# log digest: xN=occurrences, a..b=numeric range, <v xN, ...>=observed values, rare lines verbatim
+
+# pod: checkout-7d9f8b6c4-xk2m1 date: 2026-07-18
+## patterns
+x4 09:15:01-09:15:04 request method=GET <path=/api/v1/health x3, path=/api/v1/orders x1> status=200 <duration_ms=3 x1, duration_ms=2 x1, duration_ms=41 x1, duration_ms=4 x1>
+## events
+09:15:05 request method=POST path=/api/v1/orders status=500 duration_ms=87
+09:15:06 fatal error: runtime: out of memory
+```
 
 ### `parse_pod_logs(payload, *, pod_name=None) -> list[PodLogs]`
 
@@ -137,9 +196,14 @@ one line each (occurrence count, time span, value distributions / numeric
 ranges) and rare lines are kept verbatim as events. This is the cheapest and
 most readable form for "what happened in this pod?" questions — on a
 realistic 629-line incident sample it measured **~95% fewer LLM tokens** than
-the rendered text, while OOMs, restarts, and error spikes stay visible:
+the rendered text (the **98.4%** in
+[Findings](#findings--optimize-for-llm-tokens-not-bytes) is the same digest
+measured against the naive raw-JSON paste), while OOMs, restarts, and error
+spikes stay visible:
 
 ```text
+# log digest: xN=occurrences, a..b=numeric range, <v xN, ...>=observed values, rare lines verbatim
+
 # pod: order-worker-5c6d7e8f9-ab3cd date: 2026-07-18
 ## patterns
 x26 09:02:04.000-09:03:21.697 db write failed id=ord-<*> (26 distinct) err=timeout after=2000ms <retry=3 x12, retry=2 x8, retry=1 x6>
@@ -148,8 +212,16 @@ x26 09:02:04.000-09:03:21.697 db write failed id=ord-<*> (26 distinct) err=timeo
 09:03:10.000 Started container order-worker
 ```
 
-Tune with `DigestOptions(rare_threshold=3, max_values=4, sim_th=0.4)`.
-Use `compress_logs` instead when the payload must be reconstructable.
+Tune with `DigestOptions(rare_threshold=3, max_values=4, sim_th=0.4,
+always_list_keys=frozenset({"status", "code", "level", "severity"}))`.
+`always_list_keys` names `key=value` keys whose values are **categories, not
+magnitudes** (matched case-insensitively): they are always listed
+exhaustively with counts and never collapse into a numeric range past
+`max_values` — so a rare `status=404` stays visible instead of hiding inside
+`status=200..404`. Keep the set to genuinely low-cardinality categorical
+keys: every distinct value gets its own list entry, so a high-cardinality
+key here blows up the pattern line. Use `compress_logs` instead when the
+payload must be reconstructable.
 
 ## CLI
 
@@ -174,6 +246,9 @@ llmlogs compare -i rows.json --json
 
 # lossy LLM digest (biggest token saving, highest readability)
 llmlogs digest -i rows.json --stats
+
+# short numeric-heavy lines fragmenting? lower the drain3 similarity threshold
+llmlogs digest -i rows.json --sim-th 0.25 --stats
 ```
 
 ## Findings — optimize for LLM tokens, not bytes
@@ -284,14 +359,18 @@ Per pod, `digest.py` runs five steps:
    - **few distinct values → always list with counts** (`<status=200 x250,
      status=504 x30>`) — collapsing `status=200/404` into `200..404` would
      hide the rare error, statuses are categories, not magnitudes;
-   - many distinct same-key numerics → range (`duration_ms=1..9956`);
+   - many distinct same-key numerics → range (`duration_ms=1..9956`) —
+     except keys in `always_list_keys` (default `status`/`code`/`level`/
+     `severity`, case-insensitive), which stay exhaustively listed with
+     counts at any cardinality;
    - all-unique high cardinality → the shared boundary-anchored shape when
      one exists (`path=/api/v1/users/<*>/profile (8 distinct)`,
      `id=ord-<*> (77 distinct)`), else `<77 distinct values>` — a bare count
      would throw away the endpoint/id shape, which is the useful part;
    - otherwise top-N + `+K more`.
 5. **Render cheap and chronological**: date factored into the pod header,
-   `HH:MM:SS.mmm` clocks, `xN` counts with first–last time spans, patterns
+   `HH:MM:SS.mmm` clocks, `xN` counts with first–last time spans (a single
+   clock when first == last), patterns
    ordered by earliest occurrence (steady state first, then what broke — the
    same time axis as the events section), and a one-line notation legend at
    the top (~20 tokens) so the LLM never has to guess the format.
@@ -301,7 +380,8 @@ equality (a new cluster's template starts as the raw first line; numeric
 parametrization only affects tree branching), so short numeric-heavy lines
 fragment under the default 0.4 — on the multi-pod sample above, 90
 near-identical 4-token redis `keyspace` lines split into 8 patterns plus
-59 verbatim "rare" lines. `DigestOptions(sim_th=0.25)` collapsed them into
+59 verbatim "rare" lines. `DigestOptions(sim_th=0.25)` (CLI: `--sim-th
+0.25`) collapsed them into
 a single `x90 keyspace hits=902..1389 ...` pattern and cut the whole
 digest from 3,618 to 1,182 tokens. Too low over-merges heterogeneous
 lines, so the default stays 0.4.

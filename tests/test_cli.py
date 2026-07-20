@@ -107,6 +107,26 @@ def test_cli_digest_file_output_with_stats(
     assert "chars" in err
 
 
+def test_cli_digest_sim_th_collapses_fragmented_clusters(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    # Short numeric-heavy lines fragment under the default sim_th=0.4 (all
+    # land in ## events); --sim-th 0.25 must reach DigestOptions and collapse
+    # them into one pattern.
+    rows = [{"time": f"t{i}", "message": f"stats {chr(97 + i)} {i}"} for i in range(8)]
+    path = tmp_path / "rows.json"
+    path.write_text(json.dumps(rows), encoding="utf-8")
+
+    code = main(["digest", "-i", str(path), "--pod-name", "p"])
+    assert code == 0
+    assert "x8" not in capsys.readouterr().out
+
+    code = main(["digest", "-i", str(path), "--pod-name", "p", "--sim-th", "0.25"])
+    assert code == 0
+    assert "x8 t0-t7 stats" in capsys.readouterr().out
+
+
 def test_cli_digest_invalid_max_values_returns_error(
     sample_pod_logs_path: Path,
     capsys,

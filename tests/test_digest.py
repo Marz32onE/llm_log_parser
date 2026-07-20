@@ -136,6 +136,42 @@ def test_digest_options_validation() -> None:
         DigestOptions(max_values=0)
 
 
+def test_digest_options_lower_normalizes_always_list_keys() -> None:
+    # The slot lookup compares lowercased keys; a caller passing {"Status"}
+    # must not silently lose the always-list guarantee.
+    opts = DigestOptions(always_list_keys=frozenset({"Status", "CODE"}))
+    assert opts.always_list_keys == frozenset({"status", "code"})
+
+
+def test_digest_pattern_single_clock_when_first_equals_last() -> None:
+    pod = PodLogs(
+        pod_name="p",
+        logs=[
+            LogEntry(time="2026-07-18T09:00:00Z", message=f"burst worker done seq={i}")
+            for i in range(5)
+        ],
+    )
+    digest = digest_logs([pod])
+    assert "x5 09:00:00 burst worker done" in digest
+    assert "09:00:00-09:00:00" not in digest
+
+
+def test_digest_span_with_mixed_fraction_digits_is_numeric_min_max() -> None:
+    # Invariant pin (review claimed a lexicographic-ordering bug here): the
+    # clock regex admits fixed-width HH:MM:SS plus an optional .d{1,9}
+    # fraction, and for those strings lexicographic order equals numeric
+    # order — ".10" (0.10s) sorts before ".9" (0.9s) both ways.
+    pod = PodLogs(
+        pod_name="p",
+        logs=[
+            LogEntry(time=f"2026-07-18 09:15:01.{frac}", message=f"tick n={i}")
+            for i, frac in enumerate(("9", "10", "5", "25"))
+        ],
+    )
+    digest = digest_logs([pod])
+    assert "x4 09:15:01.10-09:15:01.9 tick" in digest
+
+
 def test_summarize_slot_rules() -> None:
     assert _summarize_slot([], 4) == "<*>"
     assert _summarize_slot(["a", "a"], 4) == "a"
