@@ -359,38 +359,23 @@ def _first_present(row: Mapping[str, object], keys: Sequence[str]) -> object | N
 class CompressionResult:
     """Outcome of compressing a log payload with a single algorithm.
 
-    ``original_tokens``/``compressed_tokens`` are LLM token counts (tiktoken
-    ``o200k_base``). Bytes and tokens diverge sharply on compressed output —
-    legend references like ``#a#`` are byte-cheap but token-expensive — so
-    tokens are the only size metric this package measures.
+    This package measures characters and timing only. Callers who care about
+    LLM token counts should run their own tokenizer over ``compressed_text``
+    (and the pre-compression text, if they need a before/after comparison) —
+    see CLAUDE.md's token-measurement notes for why byte/char size can be a
+    misleading proxy for LLM cost.
     """
 
     algorithm: Algorithm
-    original_tokens: int
-    compressed_tokens: int
     compressed_text: str
     duration_ms: float
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def ratio(self) -> float:
-        """Compressed tokens as a fraction of the original tokens (0-1+)."""
-        if self.original_tokens == 0:
-            return 0.0
-        return self.compressed_tokens / self.original_tokens
-
-    @property
-    def saved_percent(self) -> float:
-        """Percentage of original LLM tokens removed by compression."""
-        if self.original_tokens == 0:
-            return 0.0
-        return (1.0 - self.ratio) * 100.0
-
     def summary(self) -> str:
         """Human-readable one-line summary."""
         return (
-            f"{self.algorithm.value}: {self.original_tokens} -> {self.compressed_tokens} tokens "
-            f"({self.saved_percent:.1f}% saved, {self.duration_ms:.2f} ms)"
+            f"{self.algorithm.value}: {len(self.compressed_text)} chars "
+            f"in {self.duration_ms:.2f} ms"
         )
 
 
@@ -398,27 +383,14 @@ class CompressionResult:
 class ComparisonResult:
     """Side-by-side comparison of logzip vs drain3."""
 
-    original_tokens: int
     record_count: int
     results: dict[Algorithm, CompressionResult]
 
-    def best(self) -> CompressionResult:
-        """Return the cheapest result by LLM tokens."""
-        if not self.results:
-            msg = "No compression results available"
-            raise ValueError(msg)
-        return min(self.results.values(), key=lambda item: item.compressed_tokens)
-
     def summary(self) -> str:
         """Multi-line human-readable comparison summary."""
-        lines = [
-            f"records: {self.record_count}",
-            f"original: {self.original_tokens} tokens",
-        ]
+        lines = [f"records: {self.record_count}"]
         for algorithm in Algorithm:
             result = self.results.get(algorithm)
             if result is not None:
                 lines.append(f"  {result.summary()}")
-        best = self.best()
-        lines.append(f"best: {best.algorithm.value} ({best.saved_percent:.1f}% tokens saved)")
         return "\n".join(lines)

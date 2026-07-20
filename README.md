@@ -115,12 +115,17 @@ Primary entry point for reconstructable compression.
   with `parse_pod_logs` first
 - `algorithm`: `"logzip"` or `"drain3"`
 
-All size metrics are LLM token counts via tiktoken (`o200k_base`).
+`CompressionResult` carries `compressed_text`, `duration_ms`, and `metadata`
+— no token counting at runtime. If you want LLM token counts, run your own
+tokenizer over `compressed_text` (see [Findings](#findings--optimize-for-llm-tokens-not-bytes)
+for why char/byte counts are a misleading proxy for LLM cost).
 
 ### `compare_algorithms(pods) -> ComparisonResult`
 
-Runs both algorithms on the same `list[PodLogs]`; use `.best()` and
-`.summary()` to compare. `.best()` picks by **LLM tokens**, not bytes.
+Runs both algorithms on the same `list[PodLogs]`; use `.summary()` to
+compare per-algorithm chars and timing. There's no built-in "best" pick —
+chars alone can pick the wrong algorithm (see Findings); count tokens
+yourself if you want to rank by LLM cost.
 
 ### `digest_logs(pods, *, options=None) -> str`
 
@@ -160,7 +165,7 @@ clickhouse-client -q "
 llmlogs compress -a logzip  -i rows.json --stats
 llmlogs compress -a drain3  -i rows.ndjson --stats
 
-# compare + JSON report + artifacts (reports include LLM token metrics)
+# compare + JSON report + artifacts (reports include per-algorithm chars + timing)
 llmlogs compare -i rows.json -o report.json --write-artifacts ./out
 llmlogs compare -i rows.json --json
 
@@ -170,9 +175,14 @@ llmlogs digest -i rows.json --stats
 
 ## Findings — optimize for LLM tokens, not bytes
 
-All numbers below are from a realistic 629-line, 3-pod incident sample
-(steady traffic → DB slowdown → pool exhaustion → 504s → worker OOM →
-restart → recovery), tokenized with tiktoken `o200k_base`:
+The library itself doesn't measure tokens at runtime (see [Library
+API](#library-api)) — count tokens yourself over `compressed_text` if you
+need them. The numbers below, gathered offline with tiktoken `o200k_base`
+on a realistic 629-line, 3-pod incident sample (steady traffic → DB
+slowdown → pool exhaustion → 504s → worker OOM → restart → recovery), are
+why: they're the reason chars/bytes are a poor proxy for picking an
+algorithm, and are worth re-measuring for your own logs before trusting a
+byte-based "compression ratio".
 
 | Form | Tokens | Saved vs naive JSON paste | Notes |
 | --- | ---: | ---: | --- |
@@ -275,7 +285,6 @@ src/llmlogs/
   pipeline.py              # compress_logs()
   compare.py               # compare_algorithms()
   digest.py                # digest_logs() — lossy LLM digest
-  tokens.py                # optional tiktoken-based token counting
   compressors/             # logzip + drain3 backends
   cli.py                   # llmlogs CLI
 examples/
@@ -288,5 +297,5 @@ tests/fixtures/
 
 - Upstream query owns ClickHouse access; this package only compresses the projected rows.
 - Text form is `# pod: {name} date: {date}` then `{clock} {message}` lines so both algorithms see the same payload and LLMs are not billed for a repeated pod name or date.
-- Metrics report LLM tokens only (`tiktoken` `o200k_base`, a required dependency) — see [Findings](#findings--optimize-for-llm-tokens-not-bytes).
+- No token counting at runtime — `tiktoken` is a `dev`-only dependency used for tests and the offline measurements in [Findings](#findings--optimize-for-llm-tokens-not-bytes); count tokens yourself if you need them at runtime.
 - `digest` is lossy; the compressors are reconstructable.

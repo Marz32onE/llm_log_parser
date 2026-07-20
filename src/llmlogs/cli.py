@@ -19,7 +19,6 @@ from llmlogs.models import (
     pod_logs_to_text,
 )
 from llmlogs.pipeline import compress_logs
-from llmlogs.tokens import count_tokens
 
 
 def _read_input(path: str | None) -> str:
@@ -167,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     digest.add_argument(
         "--stats",
         action="store_true",
-        help="Print digest tokens vs rendered text to stderr",
+        help="Print digest chars vs rendered text to stderr",
     )
 
     return parser
@@ -186,14 +185,10 @@ def _run_compress(args: argparse.Namespace, pods: list[PodLogs]) -> int:
 def _comparison_report(comparison: ComparisonResult) -> dict[str, object]:
     return {
         "record_count": comparison.record_count,
-        "original_tokens": comparison.original_tokens,
         "schema": list(SCHEMA),
-        "best": comparison.best().algorithm.value,
         "results": {
             algo.value: {
-                "original_tokens": res.original_tokens,
-                "compressed_tokens": res.compressed_tokens,
-                "saved_percent": res.saved_percent,
+                "compressed_chars": len(res.compressed_text),
                 "duration_ms": res.duration_ms,
                 "metadata": res.metadata,
             }
@@ -207,11 +202,11 @@ def _run_digest(args: argparse.Namespace, pods: list[PodLogs]) -> int:
     digest = digest_logs(pods, options=options)
     _write_output(args.output, digest)
     if args.stats:
-        rendered_tokens = count_tokens(pod_logs_to_text(pods))
-        digest_tokens = count_tokens(digest)
-        saved = (1 - digest_tokens / rendered_tokens) * 100.0 if rendered_tokens else 0.0
+        rendered_chars = len(pod_logs_to_text(pods))
+        digest_chars = len(digest)
+        saved = (1 - digest_chars / rendered_chars) * 100.0 if rendered_chars else 0.0
         print(
-            f"digest: {rendered_tokens} -> {digest_tokens} tokens ({saved:.1f}% saved)",
+            f"digest: {rendered_chars} -> {digest_chars} chars ({saved:.1f}% saved)",
             file=sys.stderr,
         )
     return 0

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -21,12 +20,10 @@ from llmlogs.models import (
 )
 
 
-def _result(algorithm: Algorithm, compressed_tokens: int) -> CompressionResult:
+def _result(algorithm: Algorithm, compressed_chars: int) -> CompressionResult:
     return CompressionResult(
         algorithm=algorithm,
-        original_tokens=1000,
-        compressed_tokens=compressed_tokens,
-        compressed_text="x" * compressed_tokens,
+        compressed_text="x" * compressed_chars,
         duration_ms=1.5,
         metadata={"k": "v"},
     )
@@ -296,60 +293,35 @@ def test_to_line_escapes_newlines() -> None:
     assert line == "t1 line1\\nline2\\nline3"
 
 
-def test_compression_result_ratio_and_saved_percent() -> None:
-    result = _result(Algorithm.LOGZIP, 400)
-    assert result.ratio == pytest.approx(0.4)
-    assert result.saved_percent == pytest.approx(60.0)
-
-
-def test_compression_result_empty_original() -> None:
-    result = CompressionResult(
-        algorithm=Algorithm.DRAIN3,
-        original_tokens=0,
-        compressed_tokens=0,
-        compressed_text="",
-        duration_ms=0.0,
-    )
-    assert result.ratio == 0.0
-    assert result.saved_percent == 0.0
-
-
 def test_compression_result_summary_contains_algorithm() -> None:
     summary = _result(Algorithm.LOGZIP, 500).summary()
     assert "logzip" in summary
-    assert "1000 -> 500 tokens (50.0% saved" in summary
+    assert "500 chars in 1.50 ms" in summary
 
 
-def test_comparison_result_picks_best_by_tokens() -> None:
-    logzip = replace(_result(Algorithm.LOGZIP, 300), compressed_tokens=180)
-    drain3 = replace(_result(Algorithm.DRAIN3, 500), compressed_tokens=120)
-    comparison = ComparisonResult(
-        original_tokens=1000,
-        record_count=10,
-        results={Algorithm.LOGZIP: logzip, Algorithm.DRAIN3: drain3},
+def test_compression_result_empty_text_summary() -> None:
+    result = CompressionResult(
+        algorithm=Algorithm.DRAIN3,
+        compressed_text="",
+        duration_ms=0.0,
     )
-    assert comparison.best().algorithm is Algorithm.DRAIN3
-    summary = comparison.summary()
-    assert "original: 1000 tokens" in summary
-    assert "best: drain3 (88.0% tokens saved)" in summary
+    assert "0 chars" in result.summary()
 
 
-def test_comparison_result_best_and_summary() -> None:
+def test_comparison_result_summary_lists_each_algorithm() -> None:
     comparison = ComparisonResult(
-        original_tokens=1000,
         record_count=10,
         results={
             Algorithm.LOGZIP: _result(Algorithm.LOGZIP, 400),
             Algorithm.DRAIN3: _result(Algorithm.DRAIN3, 300),
         },
     )
-    assert comparison.best().algorithm is Algorithm.DRAIN3
     summary = comparison.summary()
     assert "records: 10" in summary
-    assert "best: drain3" in summary
+    assert "logzip: 400 chars" in summary
+    assert "drain3: 300 chars" in summary
 
 
-def test_comparison_result_best_empty_raises() -> None:
-    comparison = ComparisonResult(original_tokens=0, record_count=0, results={})
-    with pytest.raises(ValueError, match="No compression results"):
-        comparison.best()
+def test_comparison_result_summary_empty_results() -> None:
+    comparison = ComparisonResult(record_count=0, results={})
+    assert comparison.summary() == "records: 0"

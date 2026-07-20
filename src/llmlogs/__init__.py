@@ -11,7 +11,6 @@ from llmlogs.models import (
     parse_pod_logs,
 )
 from llmlogs.pipeline import compress_logs
-from llmlogs.tokens import count_tokens
 
 __all__ = [
     "Algorithm",
@@ -23,7 +22,6 @@ __all__ = [
     "__version__",
     "compare_algorithms",
     "compress_logs",
-    "count_tokens",
     "digest_logs",
     "parse_pod_logs",
 ]

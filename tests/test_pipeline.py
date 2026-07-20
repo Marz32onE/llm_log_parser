@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import count_tokens
 from llmlogs.models import Algorithm, LogEntry, PodLogs, parse_pod_logs
 from llmlogs.pipeline import compress_logs, get_compressor
-from llmlogs.tokens import count_tokens
 
 
 def test_get_compressor_accepts_string_and_enum() -> None:
@@ -26,7 +26,6 @@ def test_compress_logs_pod_logs_list(
     algorithm: Algorithm | str,
 ) -> None:
     result = compress_logs(sample_pod_logs, algorithm)
-    assert result.compressed_tokens > 0
     assert result.compressed_text
     assert result.duration_ms >= 0
     assert result.metadata["record_count"] == len(sample_pod_rows)
@@ -72,16 +71,14 @@ def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
         PodLogs(pod_name="real", logs=[LogEntry(time="t1", message="ready")]),
     ]
     result = compress_logs(pods, "drain3")
-    assert result.original_tokens == count_tokens("# pod: real\nt1 ready")
     assert result.metadata["record_count"] == 1
     assert result.metadata["line_count"] == 2
 
 
-def test_compress_logs_counts_tokens(sample_pod_logs: list[PodLogs]) -> None:
+def test_compress_logs_summary_reports_chars(sample_pod_logs: list[PodLogs]) -> None:
     result = compress_logs(sample_pod_logs, "logzip")
-    assert result.original_tokens > 0
-    assert result.compressed_tokens == count_tokens(result.compressed_text)
-    assert "tokens" in result.summary()
+    assert count_tokens(result.compressed_text) > 0
+    assert "chars" in result.summary()
 
 
 def test_compress_logs_empty_raises() -> None:

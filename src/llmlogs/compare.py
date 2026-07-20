@@ -33,8 +33,7 @@ def compare_algorithms(
         drain3_options: Optional kwargs for Drain3Compressor.
 
     Returns:
-        ComparisonResult with per-algorithm token metrics; ``best()`` picks
-        by LLM tokens.
+        ComparisonResult with per-algorithm compressed text and timing.
     """
     pod_list = ensure_pod_logs(pods)
     count = total_log_count(pod_list)
@@ -58,9 +57,7 @@ def compare_algorithms(
             **option_map.get(algorithm, {}),
         )
 
-    original_tokens = next(iter(results.values())).original_tokens
     return ComparisonResult(
-        original_tokens=original_tokens,
         record_count=count,
         results=results,
     )

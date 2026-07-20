@@ -40,7 +40,6 @@ def test_cli_compare_summary(sample_pod_logs_path: Path, capsys) -> None:
     code = main(["compare", "-i", str(sample_pod_logs_path)])
     assert code == 0
     out = capsys.readouterr().out
-    assert "best:" in out
     assert "records:" in out
     assert "logzip" in out
     assert "drain3" in out
@@ -105,7 +104,7 @@ def test_cli_digest_file_output_with_stats(
     assert out_file.read_text(encoding="utf-8").startswith("# log digest:")
     err = capsys.readouterr().err
     assert "digest:" in err
-    assert "tokens" in err
+    assert "chars" in err
 
 
 def test_cli_digest_invalid_max_values_returns_error(
@@ -119,7 +118,7 @@ def test_cli_digest_invalid_max_values_returns_error(
     assert "max_values" in err
 
 
-def test_cli_compare_report_includes_token_fields(
+def test_cli_compare_report_includes_char_fields(
     sample_pod_logs_path: Path,
     tmp_path: Path,
 ) -> None:
@@ -127,11 +126,11 @@ def test_cli_compare_report_includes_token_fields(
     code = main(["compare", "-i", str(sample_pod_logs_path), "-o", str(report)])
     assert code == 0
     payload = json.loads(report.read_text(encoding="utf-8"))
-    assert "original_tokens" in payload
+    assert "record_count" in payload
     for result in payload["results"].values():
-        assert "compressed_tokens" in result
-        assert "saved_percent" in result
-        assert "original_bytes" not in result
+        assert result["compressed_chars"] > 0
+        assert "duration_ms" in result
+        assert "original_tokens" not in result
 
 
 def test_cli_empty_input_returns_error(tmp_path: Path) -> None:
@@ -168,7 +167,7 @@ def test_cli_compare_json_stdout(sample_pod_logs_path: Path, capsys) -> None:
     code = main(["compare", "-i", str(sample_pod_logs_path), "--json"])
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["best"] in {"logzip", "drain3"}
+    assert set(payload["results"]) == {"logzip", "drain3"}
     assert payload["schema"] == ["pod_name", "logs"]
 
 

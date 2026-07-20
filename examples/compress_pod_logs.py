@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from llmlogs import (
+    Algorithm,
     LogEntry,
     PodLogs,
     compare_algorithms,
@@ -84,10 +85,11 @@ def example_flat_fixture_and_compare() -> None:
     print(comparison.summary())
     print()
 
-    best = comparison.best()
-    print(f"winner: {best.algorithm.value}")
-    print("--- best compressed (first 400 chars) ---")
-    print(best.compressed_text[:400])
+    # No built-in "best" pick — chars alone can be a misleading proxy for
+    # LLM cost (see README Findings); count tokens yourself to rank fairly.
+    logzip_result = comparison.results[Algorithm.LOGZIP]
+    print("--- logzip compressed (first 400 chars) ---")
+    print(logzip_result.compressed_text[:400])
     print()
 
 
