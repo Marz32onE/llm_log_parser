@@ -114,17 +114,11 @@ def test_drain3_masked_payload_round_trips() -> None:
     assert result.metadata["raw_fallbacks"] == 0
 
 
-def test_drain3_default_has_no_masking() -> None:
-    text = "req id=1 ok\nreq id=22 ok"
-    result = Drain3Compressor().compress(text)
-    assert "<NUM>" not in result.compressed_text
-    assert result.metadata["masking_instructions"] == 0
-
-
 def test_drain3_default_keeps_delimiters() -> None:
     # Default extra_delimiters must not destroy ':', '=', ',' in templates.
+    # Masking is disabled here so the only thing under test is delimiting.
     text = "2024-01-01 12:34:56 pod-a user=alice,role=admin login ok"
-    result = Drain3Compressor().compress(text)
+    result = Drain3Compressor(masking_instructions=[]).compress(text)
     payload = json.loads(result.compressed_text)
     template = next(iter(payload["legend"].values()))
     assert "12:34:56" in template

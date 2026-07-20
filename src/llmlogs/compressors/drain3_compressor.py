@@ -13,10 +13,10 @@ from drain3.masking import MaskingInstruction
 from drain3.template_miner_config import TemplateMinerConfig
 
 from llmlogs.compressors.base import Compressor
+from llmlogs.compressors.masks import DEFAULT_MASKS, MaskingSpec
 from llmlogs.models import Algorithm
 
-#: ``(regex, mask_name)`` pairs, the caller-facing form of a drain3 mask.
-MaskingSpec = tuple[str, str]
+__all__ = ["Drain3Compressor", "MaskingSpec", "build_template_miner"]
 
 
 def build_template_miner(  # pylint: disable=too-many-arguments
@@ -30,7 +30,12 @@ def build_template_miner(  # pylint: disable=too-many-arguments
     extra_delimiters: list[str] | None = None,
     masking_instructions: Sequence[MaskingSpec] | None = None,
 ) -> TemplateMiner:
-    """Build an in-memory drain3 miner (no persistence; one-shot jobs)."""
+    """Build an in-memory drain3 miner (no persistence; one-shot jobs).
+
+    ``masking_instructions=None`` means *no* masking here, matching bare
+    drain3. The ``DEFAULT_MASKS`` preset is applied by ``Drain3Compressor``,
+    which resolves it before calling this builder.
+    """
     config = TemplateMinerConfig()
     config.drain_sim_th = sim_th
     config.drain_depth = depth
@@ -78,6 +83,9 @@ class Drain3Compressor(Compressor):
     application logs. Lines whose parameters cannot be recovered (evicted
     cluster or template mismatch) fall back to storing the raw line so the
     payload stays reconstructable.
+
+    Mining is masked with ``DEFAULT_MASKS`` unless the caller supplies its
+    own ``masking_instructions``; pass ``[]`` to mine unmasked.
     """
 
     def __init__(  # pylint: disable=too-many-arguments
@@ -96,7 +104,11 @@ class Drain3Compressor(Compressor):
         self._max_children = max_children
         self._max_clusters = max_clusters
         self._extra_delimiters = list(extra_delimiters or [])
-        self._masking_instructions = list(masking_instructions or ())
+        # `None` means "caller expressed no preference" -> preset; an empty
+        # sequence is an explicit opt-out and must stay empty.
+        self._masking_instructions = list(
+            DEFAULT_MASKS if masking_instructions is None else masking_instructions
+        )
 
     @property
     def algorithm(self) -> Algorithm:
