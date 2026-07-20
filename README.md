@@ -220,6 +220,48 @@ What the measurements taught us:
    "what happened in this pod?" needs distributions plus anomalies, not 280
    near-identical health checks — which is exactly what `digest` renders.
 
+### Anatomy of the drain3 overshoot
+
+A second sample (822 lines, 4 pods: gateway 502/504 bursts ↔ checkout
+timeouts + circuit breaker ↔ payments OOM-kill, plus a healthy redis
+control pod) decomposes *where* the extra tokens go. Rendered text:
+25,954 tokens; drain3 payload: 28,960 (+11.6%) — while the same payload
+is 3.6% *smaller* in chars:
+
+| Payload part | Tokens | vs rendered text |
+| --- | ---: | ---: |
+| legend (19 templates) | 438 | 1.7% |
+| body: parameter values | 20,214 | 77.9% |
+| body: JSON scaffolding (`{"t":2,"p":[`, quotes, commas) | 9,118 | +35.1% |
+
+Two structural facts follow:
+
+1. **The ceiling is the constant/variable split.** Parameter values alone
+   are 78% of the rendered text's tokens, so template mining can never save
+   more than what the constant skeleton is worth (joining the bare
+   parameters with spaces — no JSON at all — measures −18.9%). The
+   scaffolding costs +35%, which eats that ceiling and more.
+2. **Template-compression literature is byte-domain.** logzip-style
+   pipelines assume an entropy coder (gzip) downstream, which flattens
+   repeated scaffolding to almost nothing. BPE is a fixed vocabulary with
+   no entropy coding — `","` and `"]},{"t":` sequences are charged full
+   price on every line. That's why logzip's −49% bytes became −18% tokens,
+   and drain3's −3.6% chars became +11.6% tokens here. drain3 itself is
+   doing its job (19 clean clusters, zero raw fallbacks, lossless
+   round-trip); it was designed for parsing/analytics, and the per-line
+   encoding is this library's own layer on top.
+
+Parameters move the number; the format's floor stays. Raising `sim_th`
+0.4 → 0.6 flips the payload from +11.6% to **−5.8%**: the stricter
+threshold stops differently-shaped lines from sharing a cluster, so
+templates stay concrete (`bytes=<NUM>` instead of `<*>`) and parameters
+drop their `key=` prefix. Masking is a precondition, not the villain —
+unmasked mining at `sim_th=0.6` explodes into 677 single-shape clusters
+(+19.0%) because every unmasked timestamp forces a new cluster. Even
+tuned, the reconstructable format saturates near its −19% floor — an
+order of magnitude away from `digest` (−86% on the same sample), which is
+why both modes exist.
+
 ## Digest design
 
 `digest` inverts the compression contract: instead of keeping every line
@@ -253,6 +295,16 @@ Per pod, `digest.py` runs five steps:
    ordered by earliest occurrence (steady state first, then what broke — the
    same time axis as the events section), and a one-line notation legend at
    the top (~20 tokens) so the LLM never has to guess the format.
+
+`sim_th` is worth tuning per workload: drain3 matches on literal token
+equality (a new cluster's template starts as the raw first line; numeric
+parametrization only affects tree branching), so short numeric-heavy lines
+fragment under the default 0.4 — on the multi-pod sample above, 90
+near-identical 4-token redis `keyspace` lines split into 8 patterns plus
+59 verbatim "rare" lines. `DigestOptions(sim_th=0.25)` collapsed them into
+a single `x90 keyspace hits=902..1389 ...` pattern and cut the whole
+digest from 3,618 to 1,182 tokens. Too low over-merges heterogeneous
+lines, so the default stays 0.4.
 
 Lossy by design — reconstruction is impossible, so `digest` is an additional
 mode, not a replacement: use `compress_logs` (logzip/drain3) when the payload
