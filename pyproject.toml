@@ -20,7 +20,7 @@ classifiers = [
   "Topic :: System :: Logging",
 ]
 dependencies = [
-  "drain3>=0.9.11",
+  "drain3-improved>=0.10.0",
   "logzip>=2.2.0",
   "pydantic>=2.0",
   "tiktoken>=0.8",
@@ -97,7 +97,7 @@ mypy_path = "src"
 packages = ["llmlogs"]
 
 [[tool.mypy.overrides]]
-module = ["drain3", "drain3.*", "logzip", "logzip.*", "tiktoken", "tiktoken.*"]
+module = ["logzip", "logzip.*", "tiktoken", "tiktoken.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
