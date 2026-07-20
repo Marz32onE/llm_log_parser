@@ -6,6 +6,7 @@ import pytest
 
 from llmlogs.models import Algorithm, LogEntry, PodLogs, parse_pod_logs
 from llmlogs.pipeline import compress_logs, get_compressor
+from llmlogs.tokens import count_tokens
 
 
 def test_get_compressor_accepts_string_and_enum() -> None:
@@ -25,7 +26,7 @@ def test_compress_logs_pod_logs_list(
     algorithm: Algorithm | str,
 ) -> None:
     result = compress_logs(sample_pod_logs, algorithm)
-    assert result.compressed_bytes > 0
+    assert result.compressed_tokens > 0
     assert result.compressed_text
     assert result.duration_ms >= 0
     assert result.metadata["record_count"] == len(sample_pod_rows)
@@ -71,33 +72,16 @@ def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
         PodLogs(pod_name="real", logs=[LogEntry(time="t1", message="ready")]),
     ]
     result = compress_logs(pods, "drain3")
-    assert result.original_bytes == len(b"# pod: real\nt1 ready")
+    assert result.original_tokens == count_tokens("# pod: real\nt1 ready")
     assert result.metadata["record_count"] == 1
     assert result.metadata["line_count"] == 2
 
 
-def test_compress_logs_injected_token_counter(sample_pod_logs: list[PodLogs]) -> None:
-    counter_calls: list[str] = []
-
-    def fake_counter(text: str) -> int:
-        counter_calls.append(text)
-        return len(text.split())
-
-    result = compress_logs(sample_pod_logs, "drain3", token_counter=fake_counter)
-    assert len(counter_calls) == 2
-    assert result.original_tokens == len(counter_calls[0].split())
-    assert result.compressed_tokens == len(counter_calls[1].split())
-    assert counter_calls[1] == result.compressed_text
-    assert "tokens" in result.summary()
-
-
-def test_compress_logs_default_token_counter_optional(
-    sample_pod_logs: list[PodLogs],
-) -> None:
-    # With tiktoken installed the fields are ints; without it they are None.
+def test_compress_logs_counts_tokens(sample_pod_logs: list[PodLogs]) -> None:
     result = compress_logs(sample_pod_logs, "logzip")
-    assert result.original_tokens is None or result.original_tokens > 0
-    assert (result.original_tokens is None) == (result.compressed_tokens is None)
+    assert result.original_tokens > 0
+    assert result.compressed_tokens == count_tokens(result.compressed_text)
+    assert "tokens" in result.summary()
 
 
 def test_compress_logs_empty_raises() -> None:

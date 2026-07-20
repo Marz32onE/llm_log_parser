@@ -105,7 +105,7 @@ def test_cli_digest_file_output_with_stats(
     assert out_file.read_text(encoding="utf-8").startswith("# log digest:")
     err = capsys.readouterr().err
     assert "digest:" in err
-    assert "bytes" in err
+    assert "tokens" in err
 
 
 def test_cli_digest_invalid_max_values_returns_error(
@@ -130,7 +130,8 @@ def test_cli_compare_report_includes_token_fields(
     assert "original_tokens" in payload
     for result in payload["results"].values():
         assert "compressed_tokens" in result
-        assert "token_saved_percent" in result
+        assert "saved_percent" in result
+        assert "original_bytes" not in result
 
 
 def test_cli_empty_input_returns_error(tmp_path: Path) -> None:

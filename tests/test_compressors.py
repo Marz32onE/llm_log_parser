@@ -13,7 +13,7 @@ def test_logzip_compressor(sample_pod_logs: list[PodLogs]) -> None:
     text = pod_logs_to_text(sample_pod_logs)
     result = LogzipCompressor(bpe_passes=1, max_legend_entries=32).compress(text)
     assert result.algorithm is Algorithm.LOGZIP
-    assert result.compressed_bytes > 0
+    assert result.compressed_tokens > 0
     assert result.metadata["bpe_passes"] == 1
 
 

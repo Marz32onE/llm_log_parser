@@ -14,7 +14,6 @@ from llmlogs.models import (
     total_log_count,
 )
 from llmlogs.pipeline import coerce_algorithm, compress_text
-from llmlogs.tokens import TokenCounter
 
 
 def compare_algorithms(
@@ -23,7 +22,6 @@ def compare_algorithms(
     algorithms: list[Algorithm | str] | None = None,
     logzip_options: dict[str, object] | None = None,
     drain3_options: dict[str, object] | None = None,
-    token_counter: TokenCounter | None = None,
 ) -> ComparisonResult:
     """Compress the same pod logs with multiple algorithms.
 
@@ -33,11 +31,10 @@ def compare_algorithms(
         algorithms: Algorithms to run (default: both logzip and drain3).
         logzip_options: Optional kwargs for LogzipCompressor.
         drain3_options: Optional kwargs for Drain3Compressor.
-        token_counter: Optional LLM token counter (defaults to tiktoken when
-            installed); when counts are present, ``best()`` picks by tokens.
 
     Returns:
-        ComparisonResult with per-algorithm metrics for easy comparison.
+        ComparisonResult with per-algorithm token metrics; ``best()`` picks
+        by LLM tokens.
     """
     pod_list = ensure_pod_logs(pods)
     count = total_log_count(pod_list)
@@ -58,13 +55,12 @@ def compare_algorithms(
             text,
             count,
             algorithm,
-            token_counter=token_counter,
             **option_map.get(algorithm, {}),
         )
 
-    original_bytes = next(iter(results.values())).original_bytes
+    original_tokens = next(iter(results.values())).original_tokens
     return ComparisonResult(
-        original_bytes=original_bytes,
+        original_tokens=original_tokens,
         record_count=count,
         results=results,
     )

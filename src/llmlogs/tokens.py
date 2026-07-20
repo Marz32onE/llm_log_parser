@@ -1,19 +1,17 @@
-"""Optional LLM token counting.
+"""LLM token counting.
 
 Uses tiktoken's ``o200k_base`` encoding as a practical proxy for modern LLM
-tokenizers when the optional ``tiktoken`` dependency is installed
-(``pip install llmlogs[tokens]``). Byte size is a poor stand-in for LLM input
-cost — legend references like ``#a#`` shrink bytes but not tokens — so the
-pipeline reports token counts whenever a counter is available.
+tokenizers. Byte size is a poor stand-in for LLM input cost — legend
+references like ``#a#`` shrink bytes but not tokens — so every size metric
+in this package is a token count.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import lru_cache
 from typing import Protocol
 
-TokenCounter = Callable[[str], int]
+import tiktoken
 
 _ENCODING_NAME = "o200k_base"
 
@@ -23,34 +21,11 @@ class _Encoding(Protocol):
 
 
 @lru_cache(maxsize=1)
-def _load_encoding() -> _Encoding | None:
-    try:
-        import tiktoken  # pylint: disable=import-outside-toplevel
-    except ImportError:
-        return None
-    try:
-        encoding: _Encoding = tiktoken.get_encoding(_ENCODING_NAME)
-    except (ValueError, OSError, RuntimeError):
-        # Optional metrics must degrade, not crash (missing/corrupt encoding cache).
-        return None
+def _load_encoding() -> _Encoding:
+    encoding: _Encoding = tiktoken.get_encoding(_ENCODING_NAME)
     return encoding
 
 
-def default_token_counter() -> TokenCounter | None:
-    """Return the default token counter, or None when tiktoken is unavailable."""
-    encoding = _load_encoding()
-    if encoding is None:
-        return None
-
-    def count(text: str) -> int:
-        return len(encoding.encode(text))
-
-    return count
-
-
-def count_tokens(text: str) -> int | None:
-    """Count LLM tokens in ``text``, or None when no tokenizer is available."""
-    counter = default_token_counter()
-    if counter is None:
-        return None
-    return counter(text)
+def count_tokens(text: str) -> int:
+    """Count LLM tokens in ``text``."""
+    return len(_load_encoding().encode(text))

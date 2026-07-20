@@ -356,103 +356,69 @@ def _first_present(row: Mapping[str, object], keys: Sequence[str]) -> object | N
 
 
 @dataclass(frozen=True, slots=True)
-class CompressionResult:  # pylint: disable=too-many-instance-attributes
+class CompressionResult:
     """Outcome of compressing a log payload with a single algorithm.
 
-    ``original_tokens``/``compressed_tokens`` are LLM token counts (None when
-    no token counter is available). Bytes and tokens diverge sharply on
-    compressed output — legend references like ``#a#`` are byte-cheap but
-    token-expensive — so token fields are the metric that matters for LLM
-    input cost.
+    ``original_tokens``/``compressed_tokens`` are LLM token counts (tiktoken
+    ``o200k_base``). Bytes and tokens diverge sharply on compressed output —
+    legend references like ``#a#`` are byte-cheap but token-expensive — so
+    tokens are the only size metric this package measures.
     """
 
     algorithm: Algorithm
-    original_bytes: int
-    compressed_bytes: int
+    original_tokens: int
+    compressed_tokens: int
     compressed_text: str
     duration_ms: float
     metadata: dict[str, Any] = field(default_factory=dict)
-    original_tokens: int | None = None
-    compressed_tokens: int | None = None
 
     @property
     def ratio(self) -> float:
-        """Compressed size as a fraction of the original size (0-1+)."""
-        if self.original_bytes == 0:
+        """Compressed tokens as a fraction of the original tokens (0-1+)."""
+        if self.original_tokens == 0:
             return 0.0
-        return self.compressed_bytes / self.original_bytes
+        return self.compressed_tokens / self.original_tokens
 
     @property
     def saved_percent(self) -> float:
-        """Percentage of original bytes removed by compression."""
-        if self.original_bytes == 0:
+        """Percentage of original LLM tokens removed by compression."""
+        if self.original_tokens == 0:
             return 0.0
         return (1.0 - self.ratio) * 100.0
 
-    @property
-    def token_saved_percent(self) -> float | None:
-        """Percentage of original LLM tokens removed (None without counts)."""
-        if self.original_tokens is None or self.compressed_tokens is None:
-            return None
-        if self.original_tokens == 0:
-            return 0.0
-        return (1.0 - self.compressed_tokens / self.original_tokens) * 100.0
-
     def summary(self) -> str:
         """Human-readable one-line summary."""
-        text = (
-            f"{self.algorithm.value}: {self.original_bytes} -> {self.compressed_bytes} bytes "
+        return (
+            f"{self.algorithm.value}: {self.original_tokens} -> {self.compressed_tokens} tokens "
             f"({self.saved_percent:.1f}% saved, {self.duration_ms:.2f} ms)"
         )
-        token_saved = self.token_saved_percent
-        if token_saved is not None:
-            text += (
-                f"; tokens {self.original_tokens} -> {self.compressed_tokens} "
-                f"({token_saved:.1f}% saved)"
-            )
-        return text
 
 
 @dataclass(frozen=True, slots=True)
 class ComparisonResult:
     """Side-by-side comparison of logzip vs drain3."""
 
-    original_bytes: int
+    original_tokens: int
     record_count: int
     results: dict[Algorithm, CompressionResult]
 
-    @property
-    def original_tokens(self) -> int | None:
-        """LLM token count of the shared rendered input (None without counts)."""
-        for result in self.results.values():
-            if result.original_tokens is not None:
-                return result.original_tokens
-        return None
-
     def best(self) -> CompressionResult:
-        """Return the cheapest result: by LLM tokens when counted, else bytes."""
+        """Return the cheapest result by LLM tokens."""
         if not self.results:
             msg = "No compression results available"
             raise ValueError(msg)
-        results = list(self.results.values())
-        if all(result.compressed_tokens is not None for result in results):
-            return min(results, key=lambda item: item.compressed_tokens or 0)
-        return min(results, key=lambda item: item.compressed_bytes)
+        return min(self.results.values(), key=lambda item: item.compressed_tokens)
 
     def summary(self) -> str:
         """Multi-line human-readable comparison summary."""
-        original = f"original: {self.original_bytes} bytes"
-        if self.original_tokens is not None:
-            original += f", {self.original_tokens} tokens"
-        lines = [f"records: {self.record_count}", original]
+        lines = [
+            f"records: {self.record_count}",
+            f"original: {self.original_tokens} tokens",
+        ]
         for algorithm in Algorithm:
             result = self.results.get(algorithm)
             if result is not None:
                 lines.append(f"  {result.summary()}")
         best = self.best()
-        token_saved = best.token_saved_percent
-        if token_saved is not None:
-            lines.append(f"best: {best.algorithm.value} ({token_saved:.1f}% tokens saved)")
-        else:
-            lines.append(f"best: {best.algorithm.value} ({best.saved_percent:.1f}% saved)")
+        lines.append(f"best: {best.algorithm.value} ({best.saved_percent:.1f}% tokens saved)")
         return "\n".join(lines)

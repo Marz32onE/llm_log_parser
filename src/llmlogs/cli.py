@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     digest.add_argument(
         "--stats",
         action="store_true",
-        help="Print digest size vs rendered text (bytes and tokens) to stderr",
+        help="Print digest tokens vs rendered text to stderr",
     )
 
     return parser
@@ -186,18 +186,14 @@ def _run_compress(args: argparse.Namespace, pods: list[PodLogs]) -> int:
 def _comparison_report(comparison: ComparisonResult) -> dict[str, object]:
     return {
         "record_count": comparison.record_count,
-        "original_bytes": comparison.original_bytes,
         "original_tokens": comparison.original_tokens,
         "schema": list(SCHEMA),
         "best": comparison.best().algorithm.value,
         "results": {
             algo.value: {
-                "original_bytes": res.original_bytes,
-                "compressed_bytes": res.compressed_bytes,
-                "saved_percent": res.saved_percent,
                 "original_tokens": res.original_tokens,
                 "compressed_tokens": res.compressed_tokens,
-                "token_saved_percent": res.token_saved_percent,
+                "saved_percent": res.saved_percent,
                 "duration_ms": res.duration_ms,
                 "metadata": res.metadata,
             }
@@ -211,14 +207,13 @@ def _run_digest(args: argparse.Namespace, pods: list[PodLogs]) -> int:
     digest = digest_logs(pods, options=options)
     _write_output(args.output, digest)
     if args.stats:
-        rendered = pod_logs_to_text(pods)
-        stats = f"digest: {len(rendered.encode('utf-8'))} -> {len(digest.encode('utf-8'))} bytes"
-        rendered_tokens = count_tokens(rendered)
+        rendered_tokens = count_tokens(pod_logs_to_text(pods))
         digest_tokens = count_tokens(digest)
-        if rendered_tokens is not None and digest_tokens is not None:
-            saved = (1 - digest_tokens / rendered_tokens) * 100.0 if rendered_tokens else 0.0
-            stats += f"; tokens {rendered_tokens} -> {digest_tokens} ({saved:.1f}% saved)"
-        print(stats, file=sys.stderr)
+        saved = (1 - digest_tokens / rendered_tokens) * 100.0 if rendered_tokens else 0.0
+        print(
+            f"digest: {rendered_tokens} -> {digest_tokens} tokens ({saved:.1f}% saved)",
+            file=sys.stderr,
+        )
     return 0
 
 

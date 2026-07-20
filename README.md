@@ -107,21 +107,20 @@ string, PodLogs-shaped dicts, or flat `{time, pod_name, message}` rows
 (grouped by pod) into the `list[PodLogs]` every other entry point takes.
 `pod_name=` supplies the default when rows only carry `time` + `message`.
 
-### `compress_logs(pods, algorithm, *, token_counter=None, **kwargs) -> CompressionResult`
+### `compress_logs(pods, algorithm, **kwargs) -> CompressionResult`
 
 Primary entry point for reconstructable compression.
 
 - `pods`: `list[PodLogs]` — the only accepted shape; convert anything else
   with `parse_pod_logs` first
 - `algorithm`: `"logzip"` or `"drain3"`
-- `token_counter`: optional `Callable[[str], int]`; defaults to tiktoken
-  (`o200k_base`) when installed, else token fields stay `None`
 
-### `compare_algorithms(pods, *, token_counter=None) -> ComparisonResult`
+All size metrics are LLM token counts via tiktoken (`o200k_base`).
+
+### `compare_algorithms(pods) -> ComparisonResult`
 
 Runs both algorithms on the same `list[PodLogs]`; use `.best()` and
-`.summary()` to compare. When token counts are available, `.best()` picks by
-**LLM tokens**, not bytes.
+`.summary()` to compare. `.best()` picks by **LLM tokens**, not bytes.
 
 ### `digest_logs(pods, *, options=None) -> str`
 
@@ -289,5 +288,5 @@ tests/fixtures/
 
 - Upstream query owns ClickHouse access; this package only compresses the projected rows.
 - Text form is `# pod: {name} date: {date}` then `{clock} {message}` lines so both algorithms see the same payload and LLMs are not billed for a repeated pod name or date.
-- Metrics report UTF-8 bytes **and** LLM tokens (when `tiktoken` is installed — `pip install llmlogs[tokens]`). Choose formats by token counts, not bytes — see [Findings](#findings--optimize-for-llm-tokens-not-bytes).
+- Metrics report LLM tokens only (`tiktoken` `o200k_base`, a required dependency) — see [Findings](#findings--optimize-for-llm-tokens-not-bytes).
 - `digest` is lossy; the compressors are reconstructable.

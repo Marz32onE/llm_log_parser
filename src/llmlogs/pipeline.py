@@ -15,7 +15,6 @@ from llmlogs.models import (
     pod_logs_to_text,
     total_log_count,
 )
-from llmlogs.tokens import TokenCounter, default_token_counter
 
 _DEFAULT_COMPRESSORS: dict[Algorithm, type[Compressor]] = {
     Algorithm.LOGZIP: LogzipCompressor,
@@ -44,34 +43,19 @@ def compress_text(
     text: str,
     record_count: int,
     algorithm: Algorithm | str,
-    token_counter: TokenCounter | None = None,
     **kwargs: object,
 ) -> CompressionResult:
-    """Compress pre-rendered log text and attach shared record/token metadata.
-
-    ``token_counter`` overrides the default tiktoken-based counter; when
-    neither is available the token fields stay None.
-    """
+    """Compress pre-rendered log text and attach shared record metadata."""
     result = get_compressor(algorithm, **kwargs).compress(text)
     metadata = dict(result.metadata)
     metadata["record_count"] = record_count
     metadata["schema"] = list(SCHEMA)
-    counter = token_counter if token_counter is not None else default_token_counter()
-    if counter is None:
-        return replace(result, metadata=metadata)
-    return replace(
-        result,
-        metadata=metadata,
-        original_tokens=counter(text),
-        compressed_tokens=counter(result.compressed_text),
-    )
+    return replace(result, metadata=metadata)
 
 
 def compress_logs(
     pods: Sequence[PodLogs],
     algorithm: Algorithm | str,
-    *,
-    token_counter: TokenCounter | None = None,
     **kwargs: object,
 ) -> CompressionResult:
     """Compress pod logs with the selected algorithm.
@@ -84,22 +68,15 @@ def compress_logs(
     Args:
         pods: List of ``PodLogs`` (``pod_name`` + ``logs[{time, message}]``).
         algorithm: ``\"logzip\"`` or ``\"drain3\"``.
-        token_counter: Optional LLM token counter (defaults to tiktoken when
-            installed; token fields stay None otherwise).
         **kwargs: Backend-specific options forwarded to the compressor.
 
     Returns:
-        CompressionResult with sizes, timing, compressed text, and metadata.
+        CompressionResult with token counts, timing, compressed text, and
+        metadata.
     """
     pod_list = ensure_pod_logs(pods)
     count = total_log_count(pod_list)
     if count == 0:
         msg = "No pod log records to compress"
         raise ValueError(msg)
-    return compress_text(
-        pod_logs_to_text(pod_list),
-        count,
-        algorithm,
-        token_counter=token_counter,
-        **kwargs,
-    )
+    return compress_text(pod_logs_to_text(pod_list), count, algorithm, **kwargs)

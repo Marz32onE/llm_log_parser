@@ -14,9 +14,9 @@ def test_compare_algorithms_runs_both(
 ) -> None:
     comparison = compare_algorithms(sample_pod_logs)
     assert comparison.record_count == len(sample_pod_rows)
-    assert comparison.original_bytes > 0
+    assert comparison.original_tokens > 0
     assert set(comparison.results) == {Algorithm.LOGZIP, Algorithm.DRAIN3}
-    assert comparison.best().compressed_bytes > 0
+    assert comparison.best().compressed_tokens > 0
     summary = comparison.summary()
     assert "records:" in summary
     assert "best:" in summary
@@ -37,12 +37,11 @@ def test_compare_algorithms_rejects_json_string(sample_pod_logs_json: str) -> No
         compare_algorithms(sample_pod_logs_json)  # type: ignore[arg-type]
 
 
-def test_compare_algorithms_token_counter(sample_pod_logs: list[PodLogs]) -> None:
-    comparison = compare_algorithms(sample_pod_logs, token_counter=lambda text: len(text))
+def test_compare_algorithms_shares_original_tokens(sample_pod_logs: list[PodLogs]) -> None:
+    comparison = compare_algorithms(sample_pod_logs)
     for result in comparison.results.values():
         assert result.original_tokens == comparison.original_tokens
-        assert result.compressed_tokens == len(result.compressed_text)
-    # With per-character counting, best-by-tokens equals best-by-bytes order.
+        assert result.compressed_tokens > 0
     assert comparison.best().algorithm in set(comparison.results)
     assert "tokens" in comparison.summary()
 

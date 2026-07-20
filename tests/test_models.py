@@ -21,12 +21,12 @@ from llmlogs.models import (
 )
 
 
-def _result(algorithm: Algorithm, compressed_bytes: int) -> CompressionResult:
+def _result(algorithm: Algorithm, compressed_tokens: int) -> CompressionResult:
     return CompressionResult(
         algorithm=algorithm,
-        original_bytes=1000,
-        compressed_bytes=compressed_bytes,
-        compressed_text="x" * compressed_bytes,
+        original_tokens=1000,
+        compressed_tokens=compressed_tokens,
+        compressed_text="x" * compressed_tokens,
         duration_ms=1.5,
         metadata={"k": "v"},
     )
@@ -305,8 +305,8 @@ def test_compression_result_ratio_and_saved_percent() -> None:
 def test_compression_result_empty_original() -> None:
     result = CompressionResult(
         algorithm=Algorithm.DRAIN3,
-        original_bytes=0,
-        compressed_bytes=0,
+        original_tokens=0,
+        compressed_tokens=0,
         compressed_text="",
         duration_ms=0.0,
     )
@@ -317,58 +317,26 @@ def test_compression_result_empty_original() -> None:
 def test_compression_result_summary_contains_algorithm() -> None:
     summary = _result(Algorithm.LOGZIP, 500).summary()
     assert "logzip" in summary
-    assert "500" in summary
+    assert "1000 -> 500 tokens (50.0% saved" in summary
 
 
-def test_compression_result_token_fields_default_none() -> None:
-    result = _result(Algorithm.LOGZIP, 400)
-    assert result.original_tokens is None
-    assert result.compressed_tokens is None
-    assert result.token_saved_percent is None
-    assert "tokens" not in result.summary()
-
-
-def test_compression_result_token_saved_percent_and_summary() -> None:
-    result = replace(_result(Algorithm.LOGZIP, 400), original_tokens=200, compressed_tokens=150)
-    assert result.token_saved_percent == pytest.approx(25.0)
-    assert "tokens 200 -> 150 (25.0% saved)" in result.summary()
-
-
-def test_compression_result_token_saved_percent_zero_original() -> None:
-    result = replace(_result(Algorithm.LOGZIP, 400), original_tokens=0, compressed_tokens=0)
-    assert result.token_saved_percent == 0.0
-
-
-def test_comparison_result_best_prefers_tokens_over_bytes() -> None:
-    # logzip wins on bytes, drain3 wins on tokens — tokens must decide.
-    logzip = replace(_result(Algorithm.LOGZIP, 300), original_tokens=200, compressed_tokens=180)
-    drain3 = replace(_result(Algorithm.DRAIN3, 500), original_tokens=200, compressed_tokens=120)
+def test_comparison_result_picks_best_by_tokens() -> None:
+    logzip = replace(_result(Algorithm.LOGZIP, 300), compressed_tokens=180)
+    drain3 = replace(_result(Algorithm.DRAIN3, 500), compressed_tokens=120)
     comparison = ComparisonResult(
-        original_bytes=1000,
+        original_tokens=1000,
         record_count=10,
         results={Algorithm.LOGZIP: logzip, Algorithm.DRAIN3: drain3},
     )
     assert comparison.best().algorithm is Algorithm.DRAIN3
-    assert comparison.original_tokens == 200
     summary = comparison.summary()
-    assert "original: 1000 bytes, 200 tokens" in summary
-    assert "best: drain3 (40.0% tokens saved)" in summary
-
-
-def test_comparison_result_falls_back_to_bytes_without_tokens() -> None:
-    logzip = replace(_result(Algorithm.LOGZIP, 300), original_tokens=200, compressed_tokens=180)
-    drain3 = _result(Algorithm.DRAIN3, 500)  # no token counts
-    comparison = ComparisonResult(
-        original_bytes=1000,
-        record_count=10,
-        results={Algorithm.LOGZIP: logzip, Algorithm.DRAIN3: drain3},
-    )
-    assert comparison.best().algorithm is Algorithm.LOGZIP
+    assert "original: 1000 tokens" in summary
+    assert "best: drain3 (88.0% tokens saved)" in summary
 
 
 def test_comparison_result_best_and_summary() -> None:
     comparison = ComparisonResult(
-        original_bytes=1000,
+        original_tokens=1000,
         record_count=10,
         results={
             Algorithm.LOGZIP: _result(Algorithm.LOGZIP, 400),
@@ -382,6 +350,6 @@ def test_comparison_result_best_and_summary() -> None:
 
 
 def test_comparison_result_best_empty_raises() -> None:
-    comparison = ComparisonResult(original_bytes=0, record_count=0, results={})
+    comparison = ComparisonResult(original_tokens=0, record_count=0, results={})
     with pytest.raises(ValueError, match="No compression results"):
         comparison.best()
