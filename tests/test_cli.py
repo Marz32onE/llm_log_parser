@@ -130,7 +130,7 @@ def test_cli_compare_report_includes_char_fields(
     for result in payload["results"].values():
         assert result["compressed_chars"] > 0
         assert "duration_ms" in result
-        assert "original_tokens" not in result
+        assert result["metadata"]["original_chars"] > 0
 
 
 def test_cli_empty_input_returns_error(tmp_path: Path) -> None:

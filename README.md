@@ -116,9 +116,12 @@ Primary entry point for reconstructable compression.
 - `algorithm`: `"logzip"` or `"drain3"`
 
 `CompressionResult` carries `compressed_text`, `duration_ms`, and `metadata`
-— no token counting at runtime. If you want LLM token counts, run your own
-tokenizer over `compressed_text` (see [Findings](#findings--optimize-for-llm-tokens-not-bytes)
-for why char/byte counts are a misleading proxy for LLM cost).
+(including `original_chars`, the pre-compression text size) — no token
+counting at runtime. If you want LLM token counts, run your own tokenizer
+over `compressed_text`, and over `pod_logs_to_text(pods)` (exported from
+`llmlogs`) for the pre-compression baseline — see
+[Findings](#findings--optimize-for-llm-tokens-not-bytes) for why char/byte
+counts are a misleading proxy for LLM cost.
 
 ### `compare_algorithms(pods) -> ComparisonResult`
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import count_tokens
 from llmlogs.models import Algorithm, LogEntry, PodLogs, parse_pod_logs
 from llmlogs.pipeline import compress_logs, get_compressor
 
@@ -73,11 +72,11 @@ def test_compress_logs_ignores_empty_pods_when_other_logs_exist() -> None:
     result = compress_logs(pods, "drain3")
     assert result.metadata["record_count"] == 1
     assert result.metadata["line_count"] == 2
+    assert result.metadata["original_chars"] == len("# pod: real\nt1 ready")
 
 
 def test_compress_logs_summary_reports_chars(sample_pod_logs: list[PodLogs]) -> None:
     result = compress_logs(sample_pod_logs, "logzip")
-    assert count_tokens(result.compressed_text) > 0
     assert "chars" in result.summary()
 
 

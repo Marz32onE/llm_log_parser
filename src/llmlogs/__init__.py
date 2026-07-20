@@ -9,6 +9,7 @@ from llmlogs.models import (
     LogEntry,
     PodLogs,
     parse_pod_logs,
+    pod_logs_to_text,
 )
 from llmlogs.pipeline import compress_logs
 
@@ -24,6 +25,7 @@ __all__ = [
     "compress_logs",
     "digest_logs",
     "parse_pod_logs",
+    "pod_logs_to_text",
 ]
 
 __version__ = "0.1.0"

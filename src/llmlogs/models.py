@@ -361,8 +361,8 @@ class CompressionResult:
 
     This package measures characters and timing only. Callers who care about
     LLM token counts should run their own tokenizer over ``compressed_text``
-    (and the pre-compression text, if they need a before/after comparison) —
-    see CLAUDE.md's token-measurement notes for why byte/char size can be a
+    (and over ``pod_logs_to_text(pods)`` for the pre-compression baseline) —
+    see the README's Findings section for why byte/char size can be a
     misleading proxy for LLM cost.
     """
 

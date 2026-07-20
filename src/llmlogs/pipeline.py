@@ -45,11 +45,16 @@ def compress_text(
     algorithm: Algorithm | str,
     **kwargs: object,
 ) -> CompressionResult:
-    """Compress pre-rendered log text and attach shared record metadata."""
+    """Compress pre-rendered log text and attach shared record metadata.
+
+    ``metadata["original_chars"]`` records the pre-compression text size so
+    a before/after comparison stays possible without re-rendering.
+    """
     result = get_compressor(algorithm, **kwargs).compress(text)
     metadata = dict(result.metadata)
     metadata["record_count"] = record_count
     metadata["schema"] = list(SCHEMA)
+    metadata["original_chars"] = len(text)
     return replace(result, metadata=metadata)
 
 
@@ -71,8 +76,8 @@ def compress_logs(
         **kwargs: Backend-specific options forwarded to the compressor.
 
     Returns:
-        CompressionResult with token counts, timing, compressed text, and
-        metadata.
+        CompressionResult with the compressed text, timing, and metadata
+        (including ``original_chars`` for a before/after comparison).
     """
     pod_list = ensure_pod_logs(pods)
     count = total_log_count(pod_list)

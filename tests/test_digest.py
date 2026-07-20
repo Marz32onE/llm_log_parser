@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from llmlogs.digest import DigestOptions, _summarize_slot, digest_logs
-from llmlogs.models import LogEntry, PodLogs, parse_pod_logs
+from llmlogs.models import LogEntry, PodLogs, parse_pod_logs, pod_logs_to_text
 
 
 def test_digest_fixture_patterns_and_events(sample_pod_logs: list[PodLogs]) -> None:
@@ -220,6 +222,38 @@ def test_digest_high_cardinality_path_keeps_prefix_shape() -> None:
     digest = digest_logs([pod])
     assert "path=/api/v1/users/<*>/profile (8 distinct)" in digest
     assert "<8 distinct values>" not in digest
+
+
+def test_digest_token_savings_on_repetitive_logs(count_tokens: Callable[[str], int]) -> None:
+    # Token-savings regression guard: on repetitive logs (digest's target
+    # workload) the digest must stay a small fraction of the rendered text.
+    # Measured 2.1% at the time of writing; 10% leaves headroom while still
+    # catching a collapse of pattern aggregation (e.g. every line rendered
+    # verbatim under ## events).
+    logs = [
+        LogEntry(
+            time=f"2026-07-18T09:{i // 60:02d}:{i % 60:02d}Z",
+            message=f"request method=GET path=/api/v1/health status=200 duration_ms={i % 40 + 2}",
+        )
+        for i in range(200)
+    ]
+    logs.append(LogEntry(time="2026-07-18T09:03:21Z", message="fatal error: out of memory"))
+    pod = PodLogs(pod_name="api-0", logs=logs)
+    rendered_tokens = count_tokens(pod_logs_to_text([pod]))
+    digest_tokens = count_tokens(digest_logs([pod]))
+    assert digest_tokens < rendered_tokens * 0.10
+
+
+def test_digest_token_savings_on_fixture(
+    sample_pod_logs: list[PodLogs],
+    count_tokens: Callable[[str], int],
+) -> None:
+    # The 15-line fixture is small and varied, so savings are modest
+    # (measured 47%); the guard is that the digest never costs more tokens
+    # than the rendered text it summarizes.
+    rendered_tokens = count_tokens(pod_logs_to_text(sample_pod_logs))
+    digest_tokens = count_tokens(digest_logs(sample_pod_logs))
+    assert digest_tokens < rendered_tokens
 
 
 def test_digest_whitespace_only_messages_yield_header_only_block() -> None:
