@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import json
+import csv
+import io
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,6 +18,14 @@ from llmlogs.compressors.masks import DEFAULT_MASKS, MaskingSpec
 from llmlogs.models import Algorithm
 
 __all__ = ["Drain3Compressor", "MaskingSpec", "build_template_miner"]
+
+_FORMAT = "drain3-llmlogs-v2"
+_PREAMBLE = (
+    "# Drain3 TSV v2: [legend] maps template_id<TAB>template.",
+    "# [body] uses template_id<TAB>parameters in placeholder order.",
+    "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
+    "# Fields use standard TSV quoting; doubled quotes escape a quote.",
+)
 
 
 def build_template_miner(  # pylint: disable=too-many-arguments
@@ -74,6 +83,35 @@ def fill_template(template: str, values: Sequence[str], pattern: re.Pattern[str]
     return pattern.sub(lambda _: next(remaining, ""), template)
 
 
+def _render_tsv_row(fields: Sequence[object]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+    writer.writerow([str(field) for field in fields])
+    return output.getvalue().removesuffix("\n")
+
+
+def _render_tsv(
+    legend: dict[str, str],
+    body: list[dict[str, Any]],
+    *,
+    with_preamble: bool,
+) -> str:
+    lines = [*_PREAMBLE, _FORMAT] if with_preamble else [_FORMAT]
+    lines.append("[legend]")
+    lines.extend(
+        _render_tsv_row((template_id, template)) for template_id, template in legend.items()
+    )
+    lines.append("[body]")
+    for entry in body:
+        if "raw" in entry:
+            lines.append(_render_tsv_row(("R", entry["raw"])))
+        elif entry["t"] is None:
+            lines.append("E")
+        else:
+            lines.append(_render_tsv_row((entry["t"], *entry["p"])))
+    return "\n".join(lines)
+
+
 class Drain3Compressor(Compressor):
     """Compress logs by mining drain3 templates and encoding line references.
 
@@ -98,6 +136,7 @@ class Drain3Compressor(Compressor):
         max_clusters: int | None = None,
         extra_delimiters: list[str] | None = None,
         masking_instructions: Sequence[MaskingSpec] | None = None,
+        with_preamble: bool = False,
     ) -> None:
         self._sim_th = sim_th
         self._depth = depth
@@ -109,6 +148,7 @@ class Drain3Compressor(Compressor):
         self._masking_instructions = list(
             DEFAULT_MASKS if masking_instructions is None else masking_instructions
         )
+        self._with_preamble = with_preamble
 
     @property
     def algorithm(self) -> Algorithm:
@@ -143,12 +183,11 @@ class Drain3Compressor(Compressor):
         )
         body, raw_fallbacks = _encode_body(encoder, raw_lines, lines, cluster_ids)
 
-        payload = {
-            "format": "drain3-llmlogs-v1",
-            "legend": legend,
-            "body": body,
-        }
-        compressed = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        compressed = _render_tsv(
+            legend,
+            body,
+            with_preamble=self._with_preamble,
+        )
         metadata: dict[str, object] = {
             "cluster_count": len(legend),
             "line_count": len(body),
@@ -158,6 +197,7 @@ class Drain3Compressor(Compressor):
             "max_children": self._max_children,
             "max_clusters": self._max_clusters,
             "masking_instructions": len(self._masking_instructions),
+            "with_preamble": self._with_preamble,
         }
         return compressed, metadata
 
