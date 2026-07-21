@@ -20,13 +20,13 @@ from llmlogs.models import Algorithm
 
 __all__ = ["Drain3Compressor", "MaskingSpec", "build_template_miner"]
 
-_FORMAT = "drain3-llmlogs-v3"
+_FORMAT = "drain3-llmlogs-v4"
 _PREAMBLE = (
-    "# Drain3 TSV v3: [legend] maps template_id<TAB>template.",
-    "# [body default=N] rows are template_id<TAB>parameters in placeholder order;",
-    "# rows starting with <TAB> omit the id and use default template N.",
-    "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
-    "# Fields use standard TSV quoting; doubled quotes escape a quote.",
+    "# Drain3 CSV v4: [legend] maps template_id,template.",
+    "# [body default=N] rows are template_id,parameters in placeholder order;",
+    "# rows starting with a comma omit the id and use default template N.",
+    "# Replace placeholders left-to-right; R,raw is fallback; E is empty.",
+    "# Fields use standard CSV quoting; doubled quotes escape a quote.",
 )
 
 
@@ -101,7 +101,7 @@ def _default_template_id(body: list[dict[str, Any]]) -> int | None:
     return min(template_id for template_id, count in counts.items() if count == best)
 
 
-def _render_tsv(
+def _render_csv(
     legend: dict[str, str],
     body: list[dict[str, Any]],
     *,
@@ -112,7 +112,7 @@ def _render_tsv(
     # costs ~45% extra wall-clock at 100k body rows for no functional gain.
     # Marker/section/E lines are written directly — they never need quoting.
     output = io.StringIO()
-    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+    writer = csv.writer(output, delimiter=",", lineterminator="\n")
     for line in (*_PREAMBLE, _FORMAT) if with_preamble else (_FORMAT,):
         output.write(f"{line}\n")
     output.write("[legend]\n")
@@ -138,7 +138,7 @@ class Drain3Compressor(Compressor):
     compact semantic representation well suited to repetitive Kubernetes
     application logs. The most common parameterized template is declared once
     in the ``[body default=N]`` header and its rows omit the id entirely (the
-    row starts with a tab). Lines whose parameters cannot be recovered (evicted
+    row starts with a comma). Lines whose parameters cannot be recovered (evicted
     cluster or template mismatch) fall back to storing the raw line so the
     payload stays reconstructable.
 
@@ -204,7 +204,7 @@ class Drain3Compressor(Compressor):
         body, raw_fallbacks = _encode_body(encoder, raw_lines, lines, cluster_ids)
 
         default_id = _default_template_id(body)
-        compressed = _render_tsv(
+        compressed = _render_csv(
             legend,
             body,
             default_id=default_id,

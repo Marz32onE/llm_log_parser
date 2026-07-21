@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from drain3_tsv import parse_drain3_tsv, reconstruct_lines
+from drain3_csv import parse_drain3_csv, reconstruct_lines
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.logzip_compressor import LogzipCompressor
 from llmlogs.models import Algorithm, PodLogs, pod_logs_to_text
@@ -27,7 +27,7 @@ def test_logzip_compressor_with_profile(sample_pod_logs: list[PodLogs]) -> None:
 def test_drain3_compressor_round_structure(sample_pod_logs: list[PodLogs]) -> None:
     text = pod_logs_to_text(sample_pod_logs)
     result = Drain3Compressor().compress(text)
-    preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    preamble, legend, body = parse_drain3_csv(result.compressed_text)
     assert preamble == []
     assert legend
     assert len(body) == text.count("\n") + 1
@@ -37,13 +37,13 @@ def test_drain3_compressor_round_structure(sample_pod_logs: list[PodLogs]) -> No
 
 def test_drain3_compressor_with_preamble() -> None:
     result = Drain3Compressor(with_preamble=True).compress("service ready")
-    preamble, _legend, _body = parse_drain3_tsv(result.compressed_text)
+    preamble, _legend, _body = parse_drain3_csv(result.compressed_text)
     assert preamble == [
-        "# Drain3 TSV v3: [legend] maps template_id<TAB>template.",
-        "# [body default=N] rows are template_id<TAB>parameters in placeholder order;",
-        "# rows starting with <TAB> omit the id and use default template N.",
-        "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
-        "# Fields use standard TSV quoting; doubled quotes escape a quote.",
+        "# Drain3 CSV v4: [legend] maps template_id,template.",
+        "# [body default=N] rows are template_id,parameters in placeholder order;",
+        "# rows starting with a comma omit the id and use default template N.",
+        "# Replace placeholders left-to-right; R,raw is fallback; E is empty.",
+        "# Fields use standard CSV quoting; doubled quotes escape a quote.",
     ]
     assert result.metadata["with_preamble"] is True
 
@@ -51,14 +51,14 @@ def test_drain3_compressor_with_preamble() -> None:
 def test_drain3_handles_blank_lines() -> None:
     text = "hello world 1\n\nhello world 2\n"
     result = Drain3Compressor().compress(text)
-    _preamble, _legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, _legend, body = parse_drain3_csv(result.compressed_text)
     assert body[1] == ["E"]
 
 
 def test_drain3_preserves_nonempty_whitespace_exactly() -> None:
     text = "  hello world  \n   "
     result = Drain3Compressor().compress(text)
-    _preamble, _legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, _legend, body = parse_drain3_csv(result.compressed_text)
     assert body == [["R", "  hello world  "], ["R", "   "]]
     assert result.metadata["raw_fallbacks"] == 2
 
@@ -68,7 +68,7 @@ def test_drain3_params_align_with_final_template() -> None:
     # still be extracted against the final legend template.
     text = "user alice logged in\nuser bob logged in"
     result = Drain3Compressor().compress(text)
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     template = next(iter(legend.values()))
     wildcards = template.count("<*>")
     for template_id, *params in body:
@@ -83,7 +83,7 @@ def test_drain3_masking_generalizes_template() -> None:
     # a NUM mask collapses them into one template with a named placeholder.
     text = "req id=1 ok\nreq id=22 ok\nreq id=333 ok"
     result = Drain3Compressor(masking_instructions=[(r"(?<==)\d+\b", "NUM")]).compress(text)
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     assert len(legend) == 1
     assert "id=<NUM>" in next(iter(legend.values()))
     assert result.metadata["raw_fallbacks"] == 0
@@ -106,22 +106,22 @@ def test_drain3_masked_payload_round_trips() -> None:
             (r"(?<==)\d+\b", "NUM"),
         ]
     ).compress(text)
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     assert "\n".join(reconstruct_lines(legend, body)) == text
     assert result.metadata["raw_fallbacks"] == 0
 
 
 def test_drain3_elides_default_template_id() -> None:
     # The most common parameterized template is declared once in the [body]
-    # header; its rows drop the leading id (row starts with a tab) to save
+    # header; its rows drop the leading id (row starts with a comma) to save
     # tokens on repetitive logs.
     text = "req id=1 ok\nreq id=22 ok\nboot done"
     result = Drain3Compressor().compress(text)
     lines = result.compressed_text.splitlines()
     assert lines.count("[body default=1]") == 1
-    assert lines[lines.index("[body default=1]") + 1 :] == ["\t1", "\t22", "2"]
+    assert lines[lines.index("[body default=1]") + 1 :] == [",1", ",22", "2"]
     assert result.metadata["default_template_id"] == 1
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     assert "\n".join(reconstruct_lines(legend, body)) == text
 
 
@@ -145,10 +145,10 @@ def test_drain3_default_tie_breaks_to_lowest_id() -> None:
     assert "[body default=1]" in result.compressed_text.splitlines()
 
 
-def test_drain3_tsv_quotes_tabs_and_quotes_losslessly() -> None:
-    text = 'event value="a\tb"\nevent value="c\td"'
+def test_drain3_csv_quotes_commas_and_quotes_losslessly() -> None:
+    text = 'event value="a,b"\nevent value="c,d"'
     result = Drain3Compressor(masking_instructions=[]).compress(text)
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     assert "\n".join(reconstruct_lines(legend, body)) == text
 
 
@@ -157,7 +157,7 @@ def test_drain3_default_keeps_delimiters() -> None:
     # Masking is disabled here so the only thing under test is delimiting.
     text = "2024-01-01 12:34:56 pod-a user=alice,role=admin login ok"
     result = Drain3Compressor(masking_instructions=[]).compress(text)
-    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, _body = parse_drain3_csv(result.compressed_text)
     template = next(iter(legend.values()))
     assert "12:34:56" in template
     assert "user=alice,role=admin" in template

@@ -1,4 +1,4 @@
-"""Helpers for asserting the Drain3 TSV wire format."""
+"""Helpers for asserting the Drain3 CSV wire format."""
 
 from __future__ import annotations
 
@@ -10,14 +10,17 @@ _PLACEHOLDER = re.compile(r"<[^<>\s]*>")
 _BODY_HEADER = re.compile(r"\[body(?: default=(\d+))?\]")
 
 
-def parse_drain3_tsv(
+def parse_drain3_csv(
     text: str,
 ) -> tuple[list[str], dict[str, str], list[list[str]]]:
-    rows = list(csv.reader(io.StringIO(text), delimiter="\t"))
-    marker_index = rows.index(["drain3-llmlogs-v3"])
+    # Preamble lines are written raw (may contain commas); only the marker and
+    # below are CSV fields.
+    lines = text.splitlines()
+    marker_line = lines.index("drain3-llmlogs-v4")
+    preamble = lines[:marker_line]
+    rows = list(csv.reader(io.StringIO("\n".join(lines[marker_line:])), delimiter=","))
     legend_index = rows.index(["[legend]"])
     body_index, default_id = _find_body_header(rows)
-    preamble = [row[0] for row in rows[:marker_index]]
     legend = {row[0]: row[1] for row in rows[legend_index + 1 : body_index]}
     body = [_resolve_default(row, default_id) for row in rows[body_index + 1 :]]
     return preamble, legend, body

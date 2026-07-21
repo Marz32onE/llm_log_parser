@@ -138,35 +138,35 @@ into a legend; the body stays line-per-line readable and reconstructable:
 ```
 
 **`drain3`** — `compress_logs(pods, "drain3")`: mined templates form a
-tab-separated legend; each line becomes a template id + parameter list
-(reconstructable), using standard TSV/CSV quoting. The most common
+comma-separated legend; each line becomes a template id + parameter list
+(reconstructable), using standard CSV quoting. The most common
 parameterized template is declared once in the `[body default=N]` header and
-its rows drop the id entirely (they start with a tab) — on repetitive logs
+its rows drop the id entirely (they start with a comma) — on repetitive logs
 that saves ~3–5% tokens over repeating the id per row. The example below
 turns on the optional preamble (`Drain3Compressor(with_preamble=True)` or
 `compress_logs(pods, "drain3", with_preamble=True)`) that explains the
 format inline; the default (`with_preamble=False`) starts directly at the
-`drain3-llmlogs-v3` marker line:
+`drain3-llmlogs-v4` marker line:
 
 ```text
-# Drain3 TSV v3: [legend] maps template_id<TAB>template.
-# [body default=N] rows are template_id<TAB>parameters in placeholder order;
-# rows starting with <TAB> omit the id and use default template N.
-# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.
-# Fields use standard TSV quoting; doubled quotes escape a quote.
-drain3-llmlogs-v3
+# Drain3 CSV v4: [legend] maps template_id,template.
+# [body default=N] rows are template_id,parameters in placeholder order;
+# rows starting with a comma omit the id and use default template N.
+# Replace placeholders left-to-right; R,raw is fallback; E is empty.
+# Fields use standard CSV quoting; doubled quotes escape a quote.
+drain3-llmlogs-v4
 [legend]
-1	# pod: checkout-7d9f8b6c4-xk2m1 date: <NUM>-<NUM>-<NUM>
-2	<TS> request <*> <*> status=<NUM> duration_ms=<NUM>
-3	<TS> fatal error: runtime: out of memory
+1,# pod: checkout-7d9f8b6c4-xk2m1 date: <NUM>-<NUM>-<NUM>
+2,<TS> request <*> <*> status=<NUM> duration_ms=<NUM>
+3,<TS> fatal error: runtime: out of memory
 [body default=2]
-1	2026	07	18
-	09:15:01	method=GET	path=/api/v1/health	200	3
-	09:15:02	method=GET	path=/api/v1/health	200	2
-	09:15:03	method=GET	path=/api/v1/orders	200	41
-	09:15:04	method=GET	path=/api/v1/health	200	4
-	09:15:05	method=POST	path=/api/v1/orders	500	87
-3	09:15:06
+1,2026,07,18
+,09:15:01,method=GET,path=/api/v1/health,200,3
+,09:15:02,method=GET,path=/api/v1/health,200,2
+,09:15:03,method=GET,path=/api/v1/orders,200,41
+,09:15:04,method=GET,path=/api/v1/health,200,4
+,09:15:05,method=POST,path=/api/v1/orders,500,87
+3,09:15:06
 ```
 
 **`digest`** — `digest_logs(pods)`: **lossy** — frequent clusters collapse
@@ -276,16 +276,16 @@ What the measurements taught us:
    each. Any byte-based "compression ratio" overstates LLM savings.
 2. **JSON envelopes are token poison.** The legacy drain3 JSON v1 payload's
    per-line `{"t":2,"p":[...]}` envelope cost *more* tokens than the plain
-   rendered text it encoded. TSV (v2, now v3 — see the `drain3` example
-   above) drops that repeated envelope, but this number predates the TSV
-   formats; re-measure the current output with your own tokenizer before
-   trusting it.
+   rendered text it encoded. The tabular formats (TSV v2/v3, now CSV v4 —
+   see the `drain3` example above) drop that repeated envelope, but this
+   number predates those formats; re-measure the current output with your
+   own tokenizer before trusting it.
 3. **The delimiter barely matters; repeated structure does.** Measured with
    `o200k_base` on a 600-line repetitive sample, comma/semicolon/pipe/space
    variants of the body all landed within ±0.1% of tab — but eliding the
-   dominant template id per row (the v3 `[body default=N]` rule) saved
+   dominant template id per row (the `[body default=N]` rule) saved
    3–5%. Commas also trigger CSV quoting on log text far more often than
-   tabs do.
+   tabs do; v4 uses comma anyway for spreadsheet-friendly output.
 4. **Space-tokenized template mining saves little on `key=value` logs.**
    drain3 treats `duration_ms=45` as one token, so extracted parameters carry
    the keys anyway and the template factors out almost nothing.

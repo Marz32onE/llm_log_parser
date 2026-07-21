@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from drain3_tsv import parse_drain3_tsv
+from drain3_csv import parse_drain3_csv
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.masks import DEFAULT_MASKS
 from llmlogs.models import PodLogs, pod_logs_to_text
@@ -12,9 +12,9 @@ from llmlogs.models import PodLogs, pod_logs_to_text
 
 def _mine(text: str) -> tuple[dict[str, str], int]:
     # Callers only ever need the legend and the fallback count; preamble and
-    # body assertions go through parse_drain3_tsv directly.
+    # body assertions go through parse_drain3_csv directly.
     result = Drain3Compressor().compress(text)
-    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, _body = parse_drain3_csv(result.compressed_text)
     return legend, int(result.metadata["raw_fallbacks"])
 
 
@@ -95,7 +95,7 @@ def test_timestamp_mask_only_fires_on_the_leading_timestamp() -> None:
 def test_timestamp_masked_payload_round_trips() -> None:
     text = "2024-01-01T00:00:01Z pod ready\n2024-01-01T00:00:02Z pod ready"
     result = Drain3Compressor().compress(text)
-    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
     restored = [legend[row[0]].replace("<TS>", row[1]) for row in body]
     assert restored == text.splitlines()
     assert result.metadata["raw_fallbacks"] == 0
@@ -127,7 +127,7 @@ def test_default_masks_round_trip_a_realistic_rendered_line() -> None:
         ]
     )
     result = Drain3Compressor().compress(text)
-    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    _preamble, legend, _body = parse_drain3_csv(result.compressed_text)
     assert len(legend) == 1
     assert result.metadata["raw_fallbacks"] == 0
 
