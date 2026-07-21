@@ -33,7 +33,9 @@ def test_cli_compress_drain3_stdout(sample_pod_logs_path: Path, capsys) -> None:
     code = main(["compress", "-a", "drain3", "-i", str(sample_pod_logs_path)])
     assert code == 0
     out = capsys.readouterr().out
-    assert "drain3-llmlogs-v1" in out
+    assert "drain3-llmlogs-v2" in out
+    assert "[legend]" in out
+    assert "[body]" in out
 
 
 def test_cli_compare_summary(sample_pod_logs_path: Path, capsys) -> None:

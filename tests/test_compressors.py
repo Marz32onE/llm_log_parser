@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import re
 
+from drain3_tsv import parse_drain3_tsv
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.logzip_compressor import LogzipCompressor
 from llmlogs.models import Algorithm, PodLogs, pod_logs_to_text
@@ -29,29 +29,38 @@ def test_logzip_compressor_with_profile(sample_pod_logs: list[PodLogs]) -> None:
 def test_drain3_compressor_round_structure(sample_pod_logs: list[PodLogs]) -> None:
     text = pod_logs_to_text(sample_pod_logs)
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    assert payload["format"] == "drain3-llmlogs-v1"
-    assert isinstance(payload["legend"], dict)
-    # body includes the pod header line + each log line
-    assert len(payload["body"]) == text.count("\n") + 1
-    assert result.metadata["cluster_count"] == len(payload["legend"])
+    preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    assert preamble == []
+    assert legend
+    assert len(body) == text.count("\n") + 1
+    assert result.metadata["cluster_count"] == len(legend)
+    assert result.metadata["with_preamble"] is False
+
+
+def test_drain3_compressor_with_preamble() -> None:
+    result = Drain3Compressor(with_preamble=True).compress("service ready")
+    preamble, _legend, _body = parse_drain3_tsv(result.compressed_text)
+    assert preamble == [
+        "# Drain3 TSV v2: [legend] maps template_id<TAB>template.",
+        "# [body] uses template_id<TAB>parameters in placeholder order.",
+        "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
+        "# Fields use standard TSV quoting; doubled quotes escape a quote.",
+    ]
+    assert result.metadata["with_preamble"] is True
 
 
 def test_drain3_handles_blank_lines() -> None:
     text = "hello world 1\n\nhello world 2\n"
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    assert payload["body"][1] == {"t": None, "p": []}
+    _preamble, _legend, body = parse_drain3_tsv(result.compressed_text)
+    assert body[1] == ["E"]
 
 
 def test_drain3_preserves_nonempty_whitespace_exactly() -> None:
     text = "  hello world  \n   "
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    assert payload["body"] == [
-        {"t": None, "p": [], "raw": "  hello world  "},
-        {"t": None, "p": [], "raw": "   "},
-    ]
+    _preamble, _legend, body = parse_drain3_tsv(result.compressed_text)
+    assert body == [["R", "  hello world  "], ["R", "   "]]
     assert result.metadata["raw_fallbacks"] == 2
 
 
@@ -60,14 +69,14 @@ def test_drain3_params_align_with_final_template() -> None:
     # still be extracted against the final legend template.
     text = "user alice logged in\nuser bob logged in"
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    template = next(iter(payload["legend"].values()))
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    template = next(iter(legend.values()))
     wildcards = template.count("<*>")
-    for entry in payload["body"]:
-        assert entry["t"] is not None
-        assert len(entry["p"]) == wildcards
-    assert payload["body"][0]["p"] == ["alice"]
-    assert payload["body"][1]["p"] == ["bob"]
+    for template_id, *params in body:
+        assert template_id in legend
+        assert len(params) == wildcards
+    assert body[0][1:] == ["alice"]
+    assert body[1][1:] == ["bob"]
 
 
 def test_drain3_masking_generalizes_template() -> None:
@@ -75,11 +84,11 @@ def test_drain3_masking_generalizes_template() -> None:
     # a NUM mask collapses them into one template with a named placeholder.
     text = "req id=1 ok\nreq id=22 ok\nreq id=333 ok"
     result = Drain3Compressor(masking_instructions=[(r"(?<==)\d+\b", "NUM")]).compress(text)
-    payload = json.loads(result.compressed_text)
-    assert len(payload["legend"]) == 1
-    assert "id=<NUM>" in next(iter(payload["legend"].values()))
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    assert len(legend) == 1
+    assert "id=<NUM>" in next(iter(legend.values()))
     assert result.metadata["raw_fallbacks"] == 0
-    assert [entry["p"] for entry in payload["body"]] == [["1"], ["22"], ["333"]]
+    assert [row[1:] for row in body] == [["1"], ["22"], ["333"]]
 
 
 def test_drain3_masked_payload_round_trips() -> None:
@@ -98,20 +107,38 @@ def test_drain3_masked_payload_round_trips() -> None:
             (r"(?<==)\d+\b", "NUM"),
         ]
     ).compress(text)
-    payload = json.loads(result.compressed_text)
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
 
     placeholder = re.compile(r"<[^<>\s]*>")
     rebuilt = []
-    for entry in payload["body"]:
-        if "raw" in entry:
-            rebuilt.append(entry["raw"])
-            continue
-        values = iter(entry["p"])
-        template = payload["legend"][str(entry["t"])]
-        rebuilt.append(placeholder.sub(lambda _: next(values), template))
+    for row in body:
+        if row[0] == "R":
+            rebuilt.append(row[1])
+        elif row[0] == "E":
+            rebuilt.append("")
+        else:
+            values = iter(row[1:])
+            rebuilt.append(placeholder.sub(lambda _: next(values), legend[row[0]]))
 
     assert "\n".join(rebuilt) == text
     assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_drain3_tsv_quotes_tabs_and_quotes_losslessly() -> None:
+    text = 'event value="a\tb"\nevent value="c\td"'
+    result = Drain3Compressor(masking_instructions=[]).compress(text)
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    placeholder = re.compile(r"<[^<>\s]*>")
+    rebuilt = []
+    for row in body:
+        if row[0] == "R":
+            rebuilt.append(row[1])
+        elif row[0] == "E":
+            rebuilt.append("")
+        else:
+            values = iter(row[1:])
+            rebuilt.append(placeholder.sub(lambda _: next(values), legend[row[0]]))
+    assert "\n".join(rebuilt) == text
 
 
 def test_drain3_default_keeps_delimiters() -> None:
@@ -119,7 +146,7 @@ def test_drain3_default_keeps_delimiters() -> None:
     # Masking is disabled here so the only thing under test is delimiting.
     text = "2024-01-01 12:34:56 pod-a user=alice,role=admin login ok"
     result = Drain3Compressor(masking_instructions=[]).compress(text)
-    payload = json.loads(result.compressed_text)
-    template = next(iter(payload["legend"].values()))
+    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    template = next(iter(legend.values()))
     assert "12:34:56" in template
     assert "user=alice,role=admin" in template

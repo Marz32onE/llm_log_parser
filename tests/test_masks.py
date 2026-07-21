@@ -2,27 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import re
 
+from drain3_tsv import parse_drain3_tsv
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.masks import DEFAULT_MASKS
 from llmlogs.models import PodLogs, pod_logs_to_text
 
 
-def _mine(text: str) -> dict[str, object]:
+def _mine(text: str) -> tuple[list[str], dict[str, str], list[list[str]], int]:
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    assert isinstance(payload, dict)
-    payload["_raw_fallbacks"] = result.metadata["raw_fallbacks"]
-    return payload
+    preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    return preamble, legend, body, int(result.metadata["raw_fallbacks"])
 
 
 def _template(text: str) -> str:
-    payload = _mine(text)
-    legend = payload["legend"]
-    assert isinstance(legend, dict)
-    return str(next(iter(legend.values())))
+    _preamble, legend, _body, _raw_fallbacks = _mine(text)
+    return next(iter(legend.values()))
 
 
 def test_every_default_pattern_compiles() -> None:
@@ -71,18 +67,18 @@ def test_timestamp_mask_collapses_full_iso_timestamps() -> None:
             "2024-01-01T00:00:03.125Z pod ready",
         ]
     )
-    payload = _mine(text)
-    assert len(payload["legend"]) == 1
+    _preamble, legend, _body, raw_fallbacks = _mine(text)
+    assert len(legend) == 1
     assert "<TS> pod ready" in _template(text)
-    assert payload["_raw_fallbacks"] == 0
+    assert raw_fallbacks == 0
 
 
 def test_timestamp_mask_collapses_bare_clock_form() -> None:
     # pod_logs_to_text factors a shared date out, leaving a bare HH:MM:SS.
     text = "\n".join(["00:00:01 pod ready", "00:00:02 pod ready", "12:30:59 pod ready"])
-    payload = _mine(text)
-    assert len(payload["legend"]) == 1
-    assert payload["_raw_fallbacks"] == 0
+    _preamble, legend, _body, raw_fallbacks = _mine(text)
+    assert len(legend) == 1
+    assert raw_fallbacks == 0
 
 
 def test_timestamp_mask_only_fires_on_the_leading_timestamp() -> None:
@@ -97,11 +93,8 @@ def test_timestamp_mask_only_fires_on_the_leading_timestamp() -> None:
 def test_timestamp_masked_payload_round_trips() -> None:
     text = "2024-01-01T00:00:01Z pod ready\n2024-01-01T00:00:02Z pod ready"
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    restored = [
-        payload["legend"][str(entry["t"])].replace("<TS>", entry["p"][0])
-        for entry in payload["body"]
-    ]
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    restored = [legend[row[0]].replace("<TS>", row[1]) for row in body]
     assert restored == text.splitlines()
     assert result.metadata["raw_fallbacks"] == 0
 
@@ -132,8 +125,8 @@ def test_default_masks_round_trip_a_realistic_rendered_line() -> None:
         ]
     )
     result = Drain3Compressor().compress(text)
-    payload = json.loads(result.compressed_text)
-    assert len(payload["legend"]) == 1
+    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    assert len(legend) == 1
     assert result.metadata["raw_fallbacks"] == 0
 
 
