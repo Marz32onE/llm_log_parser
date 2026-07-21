@@ -20,7 +20,7 @@ WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
 ORDER BY time
 ```
 
-Flat ClickHouse rows with `time, pod_name, message` (or JSON/NDJSON strings) are converted once with `parse_pod_logs`; every compression/digest entry point then takes the same `list[PodLogs]`. The CLI accepts the raw JSON forms directly.
+Flat ClickHouse rows with `time, pod_name, message` (or JSON/NDJSON strings) are converted once with `parse_pod_logs`; every compression/digest entry point then takes the same `list[PodLogs]`.
 
 | Algorithm | Package | Style |
 | --- | --- | --- |
@@ -244,34 +244,6 @@ keys: every distinct value gets its own list entry, so a high-cardinality
 key here blows up the pattern line. Use `compress_logs` instead when the
 payload must be reconstructable.
 
-## CLI
-
-Accepts **JSON array** or **NDJSON (JSONEachRow)** — flat rows or structured `PodLogs`.
-
-```bash
-# time + message only (pass pod name on the CLI)
-clickhouse-client -q "
-  SELECT time, message
-  FROM otel.logs
-  WHERE pod_name = 'checkout-7d9f8b6c4-xk2m1'
-  FORMAT JSONEachRow
-" | llmlogs compare --pod-name checkout-7d9f8b6c4-xk2m1
-
-# flat rows with pod_name in each object still work
-llmlogs compress -a logzip  -i rows.json --stats
-llmlogs compress -a drain3  -i rows.ndjson --stats
-
-# compare + JSON report + artifacts (reports include per-algorithm chars + timing)
-llmlogs compare -i rows.json -o report.json --write-artifacts ./out
-llmlogs compare -i rows.json --json
-
-# lossy LLM digest (biggest token saving, highest readability)
-llmlogs digest -i rows.json --stats
-
-# short numeric-heavy lines fragmenting? lower the drain3 similarity threshold
-llmlogs digest -i rows.json --sim-th 0.25 --stats
-```
-
 ## Findings — optimize for LLM tokens, not bytes
 
 The library itself doesn't measure tokens at runtime (see [Library
@@ -404,8 +376,7 @@ equality (a new cluster's template starts as the raw first line; numeric
 parametrization only affects tree branching), so short numeric-heavy lines
 fragment under the default 0.4 — on the multi-pod sample above, 90
 near-identical 4-token redis `keyspace` lines split into 8 patterns plus
-59 verbatim "rare" lines. `DigestOptions(sim_th=0.25)` (CLI: `--sim-th
-0.25`) collapsed them into
+59 verbatim "rare" lines. `DigestOptions(sim_th=0.25)` collapsed them into
 a single `x90 keyspace hits=902..1389 ...` pattern and cut the whole
 digest from 3,618 to 1,182 tokens. Too low over-merges heterogeneous
 lines, so the default stays 0.4.
@@ -445,7 +416,6 @@ src/llmlogs/
   compare.py               # compare_algorithms()
   digest.py                # digest_logs() — lossy LLM digest
   compressors/             # logzip + drain3 backends
-  cli.py                   # llmlogs CLI
 examples/
   compress_pod_logs.py     # runnable usage demo
 tests/fixtures/

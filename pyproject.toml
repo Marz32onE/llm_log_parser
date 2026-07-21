@@ -38,9 +38,6 @@ dev = [
   "tiktoken>=0.8",
 ]
 
-[project.scripts]
-llmlogs = "llmlogs.cli:main"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/llmlogs"]
 
