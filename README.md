@@ -137,11 +137,29 @@ into a legend; the body stays line-per-line readable and reconstructable:
 09:15:06 fatal error: runtime: out of memory
 ```
 
-**`drain3`** — `compress_logs(pods, "drain3")`: mined templates form a JSON
-legend; each line becomes a template id + parameter list (reconstructable):
+**`drain3`** — `compress_logs(pods, "drain3")`: mined templates form a
+tab-separated legend; each line becomes a template id + parameter list
+(reconstructable), using standard TSV/CSV quoting. The example below turns
+on the optional preamble (`Drain3Compressor(with_preamble=True)` or
+`compress_logs(pods, "drain3", with_preamble=True)`) that explains the
+format inline; the default (`with_preamble=False`) starts directly at the
+`drain3-llmlogs-v2` marker line:
 
-```json
-{"format":"drain3-llmlogs-v1","legend":{"1":"# pod: checkout-7d9f8b6c4-xk2m1 date: <NUM>-<NUM>-<NUM>","2":"<TS> request <*> <*> status=<NUM> duration_ms=<NUM>","3":"<TS> fatal error: runtime: out of memory"},"body":[{"t":1,"p":["2026","07","18"]},{"t":2,"p":["09:15:01","method=GET","path=/api/v1/health","200","3"]},{"t":2,"p":["09:15:02","method=GET","path=/api/v1/health","200","2"]},{"t":2,"p":["09:15:03","method=GET","path=/api/v1/orders","200","41"]},{"t":2,"p":["09:15:04","method=GET","path=/api/v1/health","200","4"]},{"t":2,"p":["09:15:05","method=POST","path=/api/v1/orders","500","87"]},{"t":3,"p":["09:15:06"]}]}
+```text
+# Drain3 TSV v2: [legend] maps template_id<TAB>template.
+# [body] uses template_id<TAB>parameters in placeholder order.
+# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.
+# Fields use standard TSV quoting; doubled quotes escape a quote.
+drain3-llmlogs-v2
+[legend]
+1	# pod: checkout-7d9f8b6c4-xk2m1 date: <NUM>-<NUM>-<NUM>
+2	<TS> request <*> <*> status=<NUM> duration_ms=<NUM>
+3	<TS> fatal error: runtime: out of memory
+[body]
+1	2026	07	18
+2	09:15:01	method=GET	path=/api/v1/health	200	3
+2	09:15:05	method=POST	path=/api/v1/orders	500	87
+3	09:15:06
 ```
 
 **`digest`** — `digest_logs(pods)`: **lossy** — frequent clusters collapse
@@ -269,7 +287,7 @@ byte-based "compression ratio".
 | Rendered text, full ISO timestamps | 19,909 | 54% | old default |
 | **Rendered text, short clock (current default)** | **14,904** | **65%** | lossless |
 | logzip on rendered text | 12,187 | 72% | readability cost (see below) |
-| drain3 JSON payload | 17,139 | 60% | **+15% vs its own input text** |
+| legacy drain3 JSON v1 payload | 17,139 | 60% | **+15% vs its own input text** |
 | **`digest`** | **686** | **98.4%** | lossy; incident story intact |
 
 What the measurements taught us:
@@ -277,9 +295,12 @@ What the measurements taught us:
 1. **Bytes mislead.** logzip saved 49% bytes but only 18% tokens on the same
    input: legend references like `#a#` are byte-cheap but cost 2–3 BPE tokens
    each. Any byte-based "compression ratio" overstates LLM savings.
-2. **JSON envelopes are token poison.** drain3's per-line
-   `{"t":2,"p":[...]}` payload costs *more* tokens than the plain rendered
-   text it encodes.
+2. **JSON envelopes are token poison.** The legacy drain3 JSON v1 payload's
+   per-line `{"t":2,"p":[...]}` envelope cost *more* tokens than the plain
+   rendered text it encoded. TSV v2 (the current wire format — see the
+   `drain3` example above) drops that repeated envelope, but this number
+   predates v2; re-measure the current output with your own tokenizer
+   before trusting it.
 3. **Space-tokenized template mining saves little on `key=value` logs.**
    drain3 treats `duration_ms=45` as one token, so extracted parameters carry
    the keys anyway and the template factors out almost nothing.
@@ -295,13 +316,13 @@ What the measurements taught us:
    "what happened in this pod?" needs distributions plus anomalies, not 280
    near-identical health checks — which is exactly what `digest` renders.
 
-### Anatomy of the drain3 overshoot
+### Anatomy of the drain3 overshoot (legacy JSON v1 payload)
 
 A second sample (822 lines, 4 pods: gateway 502/504 bursts ↔ checkout
 timeouts + circuit breaker ↔ payments OOM-kill, plus a healthy redis
-control pod) decomposes *where* the extra tokens go. Rendered text:
-25,954 tokens; drain3 payload: 28,960 (+11.6%) — while the same payload
-is 3.6% *smaller* in chars:
+control pod) decomposes *where* the extra tokens went in the legacy drain3
+JSON v1 payload. Rendered text: 25,954 tokens; JSON v1 payload: 28,960
+(+11.6%) — while the same payload is 3.6% *smaller* in chars:
 
 | Payload part | Tokens | vs rendered text |
 | --- | ---: | ---: |
