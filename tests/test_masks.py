@@ -10,14 +10,16 @@ from llmlogs.compressors.masks import DEFAULT_MASKS
 from llmlogs.models import PodLogs, pod_logs_to_text
 
 
-def _mine(text: str) -> tuple[list[str], dict[str, str], list[list[str]], int]:
+def _mine(text: str) -> tuple[dict[str, str], int]:
+    # Callers only ever need the legend and the fallback count; preamble and
+    # body assertions go through parse_drain3_tsv directly.
     result = Drain3Compressor().compress(text)
-    preamble, legend, body = parse_drain3_tsv(result.compressed_text)
-    return preamble, legend, body, int(result.metadata["raw_fallbacks"])
+    _preamble, legend, _body = parse_drain3_tsv(result.compressed_text)
+    return legend, int(result.metadata["raw_fallbacks"])
 
 
 def _template(text: str) -> str:
-    _preamble, legend, _body, _raw_fallbacks = _mine(text)
+    legend, _raw_fallbacks = _mine(text)
     return next(iter(legend.values()))
 
 
@@ -67,7 +69,7 @@ def test_timestamp_mask_collapses_full_iso_timestamps() -> None:
             "2024-01-01T00:00:03.125Z pod ready",
         ]
     )
-    _preamble, legend, _body, raw_fallbacks = _mine(text)
+    legend, raw_fallbacks = _mine(text)
     assert len(legend) == 1
     assert "<TS> pod ready" in _template(text)
     assert raw_fallbacks == 0
@@ -76,7 +78,7 @@ def test_timestamp_mask_collapses_full_iso_timestamps() -> None:
 def test_timestamp_mask_collapses_bare_clock_form() -> None:
     # pod_logs_to_text factors a shared date out, leaving a bare HH:MM:SS.
     text = "\n".join(["00:00:01 pod ready", "00:00:02 pod ready", "12:30:59 pod ready"])
-    _preamble, legend, _body, raw_fallbacks = _mine(text)
+    legend, raw_fallbacks = _mine(text)
     assert len(legend) == 1
     assert raw_fallbacks == 0
 

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
-
-from drain3_tsv import parse_drain3_tsv
+from drain3_tsv import parse_drain3_tsv, reconstruct_lines
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.logzip_compressor import LogzipCompressor
 from llmlogs.models import Algorithm, PodLogs, pod_logs_to_text
@@ -108,19 +106,7 @@ def test_drain3_masked_payload_round_trips() -> None:
         ]
     ).compress(text)
     _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
-
-    placeholder = re.compile(r"<[^<>\s]*>")
-    rebuilt = []
-    for row in body:
-        if row[0] == "R":
-            rebuilt.append(row[1])
-        elif row[0] == "E":
-            rebuilt.append("")
-        else:
-            values = iter(row[1:])
-            rebuilt.append(placeholder.sub(lambda _: next(values), legend[row[0]]))
-
-    assert "\n".join(rebuilt) == text
+    assert "\n".join(reconstruct_lines(legend, body)) == text
     assert result.metadata["raw_fallbacks"] == 0
 
 
@@ -128,17 +114,7 @@ def test_drain3_tsv_quotes_tabs_and_quotes_losslessly() -> None:
     text = 'event value="a\tb"\nevent value="c\td"'
     result = Drain3Compressor(masking_instructions=[]).compress(text)
     _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
-    placeholder = re.compile(r"<[^<>\s]*>")
-    rebuilt = []
-    for row in body:
-        if row[0] == "R":
-            rebuilt.append(row[1])
-        elif row[0] == "E":
-            rebuilt.append("")
-        else:
-            values = iter(row[1:])
-            rebuilt.append(placeholder.sub(lambda _: next(values), legend[row[0]]))
-    assert "\n".join(rebuilt) == text
+    assert "\n".join(reconstruct_lines(legend, body)) == text
 
 
 def test_drain3_default_keeps_delimiters() -> None:
