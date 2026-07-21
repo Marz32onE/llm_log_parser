@@ -158,6 +158,9 @@ drain3-llmlogs-v2
 [body]
 1	2026	07	18
 2	09:15:01	method=GET	path=/api/v1/health	200	3
+2	09:15:02	method=GET	path=/api/v1/health	200	2
+2	09:15:03	method=GET	path=/api/v1/orders	200	41
+2	09:15:04	method=GET	path=/api/v1/health	200	4
 2	09:15:05	method=POST	path=/api/v1/orders	500	87
 3	09:15:06
 ```
