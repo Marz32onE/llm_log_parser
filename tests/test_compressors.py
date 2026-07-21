@@ -39,8 +39,9 @@ def test_drain3_compressor_with_preamble() -> None:
     result = Drain3Compressor(with_preamble=True).compress("service ready")
     preamble, _legend, _body = parse_drain3_tsv(result.compressed_text)
     assert preamble == [
-        "# Drain3 TSV v2: [legend] maps template_id<TAB>template.",
-        "# [body] uses template_id<TAB>parameters in placeholder order.",
+        "# Drain3 TSV v3: [legend] maps template_id<TAB>template.",
+        "# [body default=N] rows are template_id<TAB>parameters in placeholder order;",
+        "# rows starting with <TAB> omit the id and use default template N.",
         "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
         "# Fields use standard TSV quoting; doubled quotes escape a quote.",
     ]
@@ -108,6 +109,40 @@ def test_drain3_masked_payload_round_trips() -> None:
     _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
     assert "\n".join(reconstruct_lines(legend, body)) == text
     assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_drain3_elides_default_template_id() -> None:
+    # The most common parameterized template is declared once in the [body]
+    # header; its rows drop the leading id (row starts with a tab) to save
+    # tokens on repetitive logs.
+    text = "req id=1 ok\nreq id=22 ok\nboot done"
+    result = Drain3Compressor().compress(text)
+    lines = result.compressed_text.splitlines()
+    assert lines.count("[body default=1]") == 1
+    assert lines[lines.index("[body default=1]") + 1 :] == ["\t1", "\t22", "2"]
+    assert result.metadata["default_template_id"] == 1
+    _preamble, legend, body = parse_drain3_tsv(result.compressed_text)
+    assert "\n".join(reconstruct_lines(legend, body)) == text
+
+
+def test_drain3_no_default_without_parameterized_rows() -> None:
+    # A zero-placeholder template gains nothing from elision (its row is just
+    # the id) and an elided zero-param row would render as a blank line, so
+    # the header stays plain and every row keeps its id.
+    text = "same line\nsame line"
+    result = Drain3Compressor().compress(text)
+    lines = result.compressed_text.splitlines()
+    assert "[body]" in lines
+    assert lines[lines.index("[body]") + 1 :] == ["1", "1"]
+    assert result.metadata["default_template_id"] is None
+
+
+def test_drain3_default_tie_breaks_to_lowest_id() -> None:
+    # Equal row counts must resolve deterministically or the payload flaps.
+    text = "up n=1\nlink from=10.0.0.1 to=10.0.0.2 established"
+    result = Drain3Compressor().compress(text)
+    assert result.metadata["default_template_id"] == 1
+    assert "[body default=1]" in result.compressed_text.splitlines()
 
 
 def test_drain3_tsv_quotes_tabs_and_quotes_losslessly() -> None:

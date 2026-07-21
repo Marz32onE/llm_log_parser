@@ -34,7 +34,7 @@ def test_compress_logs_pod_logs_list(
 
 def test_compress_logs_parsed_json_string(sample_pod_logs_json: str) -> None:
     result = compress_logs(parse_pod_logs(sample_pod_logs_json), "drain3")
-    assert result.compressed_text.startswith("drain3-llmlogs-v2\n")
+    assert result.compressed_text.startswith("drain3-llmlogs-v3\n")
     assert result.metadata["cluster_count"] >= 1
 
 

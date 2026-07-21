@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -19,10 +20,11 @@ from llmlogs.models import Algorithm
 
 __all__ = ["Drain3Compressor", "MaskingSpec", "build_template_miner"]
 
-_FORMAT = "drain3-llmlogs-v2"
+_FORMAT = "drain3-llmlogs-v3"
 _PREAMBLE = (
-    "# Drain3 TSV v2: [legend] maps template_id<TAB>template.",
-    "# [body] uses template_id<TAB>parameters in placeholder order.",
+    "# Drain3 TSV v3: [legend] maps template_id<TAB>template.",
+    "# [body default=N] rows are template_id<TAB>parameters in placeholder order;",
+    "# rows starting with <TAB> omit the id and use default template N.",
     "# Replace placeholders left-to-right; R<TAB>raw is fallback; E is empty.",
     "# Fields use standard TSV quoting; doubled quotes escape a quote.",
 )
@@ -83,10 +85,27 @@ def fill_template(template: str, values: Sequence[str], pattern: re.Pattern[str]
     return pattern.sub(lambda _: next(remaining, ""), template)
 
 
+def _default_template_id(body: list[dict[str, Any]]) -> int | None:
+    """Pick the template whose id the body elides: most parameterized rows.
+
+    Only rows with parameters qualify — a zero-param row is already just its
+    id, and eliding it would render a blank line that the trailing-newline
+    strip could eat. Ties resolve to the lowest id so output is deterministic.
+    """
+    counts: Counter[int] = Counter(
+        entry["t"] for entry in body if entry["t"] is not None and entry["p"]
+    )
+    if not counts:
+        return None
+    best = max(counts.values())
+    return min(template_id for template_id, count in counts.items() if count == best)
+
+
 def _render_tsv(
     legend: dict[str, str],
     body: list[dict[str, Any]],
     *,
+    default_id: int | None,
     with_preamble: bool,
 ) -> str:
     # One shared writer over one buffer: a per-row StringIO/csv.writer pair
@@ -98,12 +117,14 @@ def _render_tsv(
         output.write(f"{line}\n")
     output.write("[legend]\n")
     writer.writerows(legend.items())
-    output.write("[body]\n")
+    output.write(f"[body default={default_id}]\n" if default_id is not None else "[body]\n")
     for entry in body:
         if "raw" in entry:
             writer.writerow(("R", entry["raw"]))
         elif entry["t"] is None:
             output.write("E\n")
+        elif entry["t"] == default_id:
+            writer.writerow(("", *entry["p"]))
         else:
             writer.writerow((entry["t"], *entry["p"]))
     return output.getvalue().removesuffix("\n")
@@ -115,7 +136,9 @@ class Drain3Compressor(Compressor):
     Each unique template becomes a legend entry. Body lines store the template
     id plus parameters extracted against the final mined template, which is a
     compact semantic representation well suited to repetitive Kubernetes
-    application logs. Lines whose parameters cannot be recovered (evicted
+    application logs. The most common parameterized template is declared once
+    in the ``[body default=N]`` header and its rows omit the id entirely (the
+    row starts with a tab). Lines whose parameters cannot be recovered (evicted
     cluster or template mismatch) fall back to storing the raw line so the
     payload stays reconstructable.
 
@@ -180,15 +203,18 @@ class Drain3Compressor(Compressor):
         )
         body, raw_fallbacks = _encode_body(encoder, raw_lines, lines, cluster_ids)
 
+        default_id = _default_template_id(body)
         compressed = _render_tsv(
             legend,
             body,
+            default_id=default_id,
             with_preamble=self._with_preamble,
         )
         metadata: dict[str, object] = {
             "cluster_count": len(legend),
             "line_count": len(body),
             "raw_fallbacks": raw_fallbacks,
+            "default_template_id": default_id,
             "sim_th": self._sim_th,
             "depth": self._depth,
             "max_children": self._max_children,
