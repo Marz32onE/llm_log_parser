@@ -15,16 +15,32 @@ from __future__ import annotations
 #: ``(regex, mask_name)`` pairs, the caller-facing form of a drain3 mask.
 MaskingSpec = tuple[str, str]
 
-#: Leading rendered timestamps, in both shapes ``pod_logs_to_text`` emits.
-#:
-#: Anchored at the line start on purpose: the leading timestamp is
-#: structural, while a date *inside* the message is content and must reach
-#: the template intact.
-_TIMESTAMP_MASKS: tuple[MaskingSpec, ...] = (
-    # Full form: "2024-01-01T12:34:56.789Z" / "2024-01-01 12:34:56+00:00".
-    (r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?", "TS"),
-    # Bare clock, left over once a shared date has been factored out.
-    (r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?", "TS"),
+#: Anchored bare clock, left over once a shared date has been factored out
+#: of a rendered line by ``pod_logs_to_text``. Anchored on purpose: this is
+#: the one shape that only ever appears at the line start.
+_TIMESTAMP_MASKS: tuple[MaskingSpec, ...] = ((r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?", "TS"),)
+
+#: Timestamps and UUIDs anywhere in the line, boundary-guarded rather than
+#: anchored: JSON-formatted log messages carry their own timestamp and
+#: request/trace ids *inside* the message body, not just at the line start,
+#: and those must mask the same way or the catch-all ``NUM`` mask below
+#: shreds them into one wildcard per digit run.
+_INLINE_MASKS: tuple[MaskingSpec, ...] = (
+    # Full ISO timestamp: "2024-01-01T12:34:56.789Z" / "...+00:00" / naive.
+    # Also matches a leading (unfactored) full-form timestamp -- the "|^"
+    # boundary alternative is satisfied at line start, so this subsumes what
+    # used to be a separate anchored full-form mask.
+    (
+        r"((?<=[^A-Za-z0-9])|^)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+        r"(?:Z|[+-]\d{2}:\d{2})?)((?=[^A-Za-z0-9])|$)",
+        "TS",
+    ),
+    # UUID: 8-4-4-4-12 hex, case-insensitive.
+    (
+        r"((?<=[^A-Za-z0-9])|^)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})((?=[^A-Za-z0-9])|$)",
+        "UUID",
+    ),
 )
 
 #: The masking set shipped in upstream Drain3's ``examples/drain3.ini``.
@@ -46,4 +62,4 @@ _UPSTREAM_MASKS: tuple[MaskingSpec, ...] = (
 #:
 #: Pass ``masking_instructions=[]`` to mine without masking, which is what
 #: bare drain3 does.
-DEFAULT_MASKS: tuple[MaskingSpec, ...] = _TIMESTAMP_MASKS + _UPSTREAM_MASKS
+DEFAULT_MASKS: tuple[MaskingSpec, ...] = _TIMESTAMP_MASKS + _INLINE_MASKS + _UPSTREAM_MASKS

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from drain3_csv import parse_drain3_csv
+from drain3_csv import parse_drain3_csv, reconstruct_lines
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
 from llmlogs.compressors.masks import DEFAULT_MASKS
 from llmlogs.models import PodLogs, pod_logs_to_text
@@ -83,13 +83,51 @@ def test_timestamp_mask_collapses_bare_clock_form() -> None:
     assert raw_fallbacks == 0
 
 
-def test_timestamp_mask_only_fires_on_the_leading_timestamp() -> None:
-    # Only the leading rendered timestamp is structural. A date inside the
-    # message is content: the catch-all NUM mask still touches its digits,
-    # but it must not be folded into a second <TS> token.
+def test_timestamp_mask_fires_on_leading_and_inline_timestamps() -> None:
+    # Inline masking now fires anywhere in the line, not just the leading
+    # rendered timestamp -- JSON-formatted messages carry their timestamp
+    # inside the message body, and it must mask the same way.
     template = _template("00:00:01 backup window starts 2024-03-01T00:00:00Z")
-    assert template.count("<TS>") == 1
-    assert template.startswith("<TS> backup window starts ")
+    assert template == "<TS> backup window starts <TS>"
+
+
+def test_inline_timestamp_mask_collapses_json_embedded_timestamps() -> None:
+    text = "\n".join(
+        [
+            '{"time": "2024-01-01T12:34:56.789Z", "msg": "healthy"}',
+            '{"time": "2024-01-01T12:34:57.001Z", "msg": "healthy"}',
+        ]
+    )
+    legend, raw_fallbacks = _mine(text)
+    assert len(legend) == 1
+    assert "<TS>" in next(iter(legend.values()))
+    assert raw_fallbacks == 0
+
+
+def test_uuid_mask_collapses_embedded_uuids() -> None:
+    text = "\n".join(
+        [
+            "request 550e8400-e29b-41d4-a716-446655440000 accepted",
+            "request 6ba7b810-9dad-11d1-80b4-00c04fd430c8 accepted",
+        ]
+    )
+    legend, raw_fallbacks = _mine(text)
+    assert len(legend) == 1
+    assert "<UUID>" in next(iter(legend.values()))
+    assert raw_fallbacks == 0
+
+
+def test_json_message_masking_round_trips_ts_and_uuid() -> None:
+    lines = [
+        '{"time": "2024-01-01T12:34:56.789Z", "id": "550e8400-e29b-41d4-a716-446655440000",'
+        ' "status": 200}',
+        '{"time": "2024-01-01T12:34:57.001Z", "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",'
+        ' "status": 404}',
+    ]
+    result = Drain3Compressor().compress("\n".join(lines))
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
+    assert reconstruct_lines(legend, body) == lines
+    assert result.metadata["raw_fallbacks"] == 0
 
 
 def test_timestamp_masked_payload_round_trips() -> None:
