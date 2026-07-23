@@ -150,8 +150,8 @@ class Drain3Compressor(Compressor):
         # Mirrors build_template_miner's keyword-only knobs; see the note there.
         self,
         *,
-        sim_th: float = 0.4,
-        depth: int = 4,
+        sim_th: float = 0.5,
+        depth: int = 5,
         max_children: int = 100,
         max_clusters: int | None = None,
         extra_delimiters: list[str] | None = None,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from drain3_csv import parse_drain3_csv, reconstruct_lines
 from llmlogs.compressors.drain3_compressor import Drain3Compressor
@@ -167,6 +168,82 @@ def test_default_masks_round_trip_a_realistic_rendered_line() -> None:
     result = Drain3Compressor().compress(text)
     _preamble, legend, _body = parse_drain3_csv(result.compressed_text)
     assert len(legend) == 1
+    assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_str_mask_round_trips_compact_json_through_a_skeleton_template() -> None:
+    # Compact JSON is a single whitespace token; unmasked, every distinct value
+    # makes the token unique and drain3 collapses the whole message to one
+    # "<TS> <*>" wildcard. The STR mask normalises quoted values so the JSON
+    # skeleton survives into the legend.
+    lines = [
+        '00:00:01 {"level":"info","user":"alice","duration_ms":42}',
+        '00:00:02 {"level":"error","user":"bob","duration_ms":17}',
+    ]
+    result = Drain3Compressor().compress("\n".join(lines))
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
+    assert len(legend) == 1
+    template = next(iter(legend.values()))
+    assert '"level":"<STR>"' in template
+    assert "<*>" not in template
+    assert reconstruct_lines(legend, body) == lines
+    assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_str_mask_fires_on_the_first_array_string_element() -> None:
+    # Array strings after '[' mask like object values; later elements sit
+    # behind ',' and stay literal.
+    lines = [
+        '00:00:01 {"tags":["alice","web"]}',
+        '00:00:02 {"tags":["bob","web"]}',
+    ]
+    legend, raw_fallbacks = _mine("\n".join(lines))
+    assert len(legend) == 1
+    assert '["<STR>","web"]' in next(iter(legend.values()))
+    assert raw_fallbacks == 0
+
+
+def test_str_mask_leaves_empty_string_values_literal() -> None:
+    # drain3's non-exact extraction regex compiles every placeholder to ".+?",
+    # which cannot match an empty parameter — masking "" would turn each such
+    # line into an R fallback (observed: 60/60 lines lost with a "*" quantifier).
+    lines = [
+        '00:00:01 {"note":"","n":7}',
+        '00:00:02 {"note":"","n":8}',
+    ]
+    result = Drain3Compressor().compress("\n".join(lines))
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
+    assert '"note":""' in next(iter(legend.values()))
+    assert reconstruct_lines(legend, body) == lines
+    assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_str_mask_spans_escaped_quotes_inside_values() -> None:
+    # A value containing \" must mask as one STR, not split at the escape.
+    lines = [
+        '00:00:01 {"msg":"say \\"hi\\" now","code":401}',
+        '00:00:02 {"msg":"say \\"yo\\" now","code":403}',
+    ]
+    result = Drain3Compressor().compress("\n".join(lines))
+    _preamble, legend, body = parse_drain3_csv(result.compressed_text)
+    assert len(legend) == 1
+    assert '"msg":"<STR>"' in next(iter(legend.values()))
+    assert reconstruct_lines(legend, body) == lines
+    assert result.metadata["raw_fallbacks"] == 0
+
+
+def test_drain3_token_savings_on_compact_json(count_tokens: Callable[[str], int]) -> None:
+    # Regression: before the STR mask, compact JSON compressed to MORE tokens
+    # than the raw text (wildcard template + CSV quote doubling).
+    users = ["alice", "bob", "carol", "dave", "erin", "frank"]
+    lines = [
+        f'00:00:{i:02d} {{"level":"info","user":"{users[i % 6]}",'
+        f'"action":"login","request_id":"id{i:04x}","duration_ms":{i * 37 % 900}}}'
+        for i in range(30)
+    ]
+    text = "\n".join(lines)
+    result = Drain3Compressor().compress(text)
+    assert count_tokens(result.compressed_text) < count_tokens(text)
     assert result.metadata["raw_fallbacks"] == 0
 
 

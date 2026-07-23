@@ -43,6 +43,18 @@ _INLINE_MASKS: tuple[MaskingSpec, ...] = (
     ),
 )
 
+#: Quoted JSON string values: ``"key":"value"`` and the first ``["value"``
+#: array element. Compact JSON is a single whitespace token, so without this
+#: mask every distinct value makes the token unique and drain3 collapses the
+#: whole message to one ``<*>`` wildcard (and CSV quote-doubling then makes
+#: the payload *larger* than the raw text). Two load-bearing regex choices:
+#: ``(?:[^"\\]|\\.)`` steps over escaped quotes so a value containing ``\"``
+#: masks as one STR, and the ``+`` quantifier (never ``*``) skips empty
+#: values — drain3's non-exact extraction regex compiles placeholders to
+#: ``.+?``, which cannot match an empty parameter, so masking ``""`` would
+#: push every such line into an R fallback.
+_JSON_MASKS: tuple[MaskingSpec, ...] = ((r'(?<=[:\[]")(?:[^"\\]|\\.)+(?=")', "STR"),)
+
 #: The masking set shipped in upstream Drain3's ``examples/drain3.ini``.
 #:
 #: Two deliberate deviations: upstream's ``CMD`` example is dropped (it keys
@@ -62,4 +74,6 @@ _UPSTREAM_MASKS: tuple[MaskingSpec, ...] = (
 #:
 #: Pass ``masking_instructions=[]`` to mine without masking, which is what
 #: bare drain3 does.
-DEFAULT_MASKS: tuple[MaskingSpec, ...] = _TIMESTAMP_MASKS + _INLINE_MASKS + _UPSTREAM_MASKS
+DEFAULT_MASKS: tuple[MaskingSpec, ...] = (
+    _TIMESTAMP_MASKS + _INLINE_MASKS + _JSON_MASKS + _UPSTREAM_MASKS
+)
